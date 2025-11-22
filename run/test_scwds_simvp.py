@@ -21,6 +21,51 @@ from metai.model.simvp import SimVPConfig, SimVP
 # Part 0: 辅助工具函数
 # ==========================================
 
+class TeeLogger:
+    """同时输出到控制台和文件的日志类"""
+    def __init__(self, log_file_path):
+        self.log_file = open(log_file_path, 'w', encoding='utf-8')
+        self.console = sys.stdout
+        
+    def write(self, message):
+        """写入消息到控制台和文件"""
+        self.console.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()
+        
+    def flush(self):
+        """刷新缓冲区"""
+        self.console.flush()
+        self.log_file.flush()
+        
+    def close(self):
+        """关闭文件"""
+        if self.log_file:
+            self.log_file.close()
+            
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+# 全局日志对象，初始为 None
+_logger = None
+
+def set_logger(log_file_path):
+    """设置全局日志对象"""
+    global _logger
+    _logger = TeeLogger(log_file_path)
+    sys.stdout = _logger
+    
+def restore_stdout():
+    """恢复标准输出"""
+    global _logger
+    if _logger:
+        sys.stdout = _logger.console
+        _logger.close()
+        _logger = None
+
 def create_diff_cmap():
     """创建中间色为 #30123B 的差异图 colormap"""
     middle_color = (0.188, 0.071, 0.231, 1.0)
@@ -50,22 +95,38 @@ def find_best_ckpt(save_dir: str) -> str:
         raise FileNotFoundError(f'No checkpoint found in {save_dir}')
     return cpts[-1]
 
-def print_checkpoint_info(ckpt_path: str):
-    """从 checkpoint 文件中提取并打印训练关键信息"""
+def get_checkpoint_info(ckpt_path: str):
+    """从 checkpoint 文件中提取训练关键信息（不打印）"""
     try:
         ckpt = torch.load(ckpt_path, map_location='cpu')
-        print("=" * 80)
-        print(f"[INFO] Loaded Checkpoint: {os.path.basename(ckpt_path)}")
-        print(f"  Epoch: {ckpt.get('epoch', 'N/A')}")
-        print(f"  Global Step: {ckpt.get('global_step', 'N/A')}")
-        
+        epoch = ckpt.get('epoch', None)
+        global_step = ckpt.get('global_step', None)
         hparams = ckpt.get('hyper_parameters', {})
-        if hparams:
-            print(f"  Model Type: {hparams.get('model_type', 'N/A')}")
-            print(f"  Hidden Dim (T): {hparams.get('hid_T', 'N/A')}")
-        print("=" * 80)
+        return {
+            'epoch': epoch,
+            'global_step': global_step,
+            'hparams': hparams,
+            'ckpt_name': os.path.basename(ckpt_path)
+        }
     except Exception as e:
-        print(f"[WARNING] 无法读取 checkpoint 信息: {e}")
+        return {'error': str(e)}
+
+def print_checkpoint_info(ckpt_info: dict):
+    """打印 checkpoint 信息"""
+    if 'error' in ckpt_info:
+        print(f"[WARNING] 无法读取 checkpoint 信息: {ckpt_info['error']}")
+        return
+    
+    print("=" * 80)
+    print(f"[INFO] Loaded Checkpoint: {ckpt_info['ckpt_name']}")
+    print(f"  Epoch: {ckpt_info.get('epoch', 'N/A')}")
+    print(f"  Global Step: {ckpt_info.get('global_step', 'N/A')}")
+    
+    hparams = ckpt_info.get('hparams', {})
+    if hparams:
+        print(f"  Model Type: {hparams.get('model_type', 'N/A')}")
+        print(f"  Hidden Dim (T): {hparams.get('hid_T', 'N/A')}")
+    print("=" * 80)
 
 # ==========================================
 # Part 1: 全局评分配置 (Metric Configuration)
@@ -320,8 +381,6 @@ def main():
     args = parse_args()
     device = torch.device(args.accelerator if torch.cuda.is_available() else 'cpu')
     
-    print(f"[INFO] Starting Test on {device}")
-    
     # 1. Config & Model
     config = SimVPConfig(
         data_path=args.data_path,
@@ -330,8 +389,30 @@ def main():
     )
     resize_shape = (config.in_shape[2], config.in_shape[3])
     
+    # 先获取 checkpoint 信息（不打印）
     ckpt_path = find_best_ckpt(config.save_dir)
-    print_checkpoint_info(ckpt_path)
+    ckpt_info = get_checkpoint_info(ckpt_path)
+    epoch = ckpt_info.get('epoch', None)
+    
+    # 如果无法从 checkpoint 获取 epoch，使用默认值
+    if epoch is None:
+        epoch = 0
+    
+    # 创建输出目录
+    out_dir = os.path.join(config.save_dir, f'vis_{epoch}')
+    os.makedirs(out_dir, exist_ok=True)
+    
+    # 初始化日志系统，将打印信息保存到文件
+    log_file_path = os.path.join(out_dir, 'log.txt')
+    set_logger(log_file_path)
+    
+    # 现在开始打印信息（会被保存到日志文件）
+    print(f"[INFO] Starting Test on {device}")
+    print_checkpoint_info(ckpt_info)
+    if ckpt_info.get('epoch') is None:
+        print(f"[WARNING] 无法获取 epoch，使用默认值: {epoch}")
+    print(f"[INFO] 可视化结果将保存到: {out_dir}")
+    print(f"[INFO] 日志信息将保存到: {log_file_path}")
     
     # 加载模型
     model = SimVP.load_from_checkpoint(ckpt_path)
@@ -346,10 +427,6 @@ def main():
     )
     data_module.setup('test')
     test_loader = data_module.test_dataloader()
-    
-    # 3. Loop
-    out_dir = os.path.join(config.save_dir, 'vis_final_v2')
-    os.makedirs(out_dir, exist_ok=True)
     
     scores = []
     
@@ -373,6 +450,13 @@ def main():
     
     if len(scores) > 0:
         print(f"\n[FINAL] Average Score ({len(scores)} samples): {np.mean(scores):.6f}")
+    
+    # 恢复标准输出并关闭日志文件
+    restore_stdout()
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    finally:
+        # 确保即使出错也恢复标准输出
+        restore_stdout()

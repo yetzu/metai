@@ -1,6 +1,7 @@
 nohup bash run.scwds.convlstm.sh train > train_convlstm_scwds.log 2>&1 &
 nohup bash run.scwds.simvp.sh train > train_simvp_scwds.log 2>&1 &
 
+
 nohup bash run.scwds.simvp.sh train_gan > train_gan_simvp_scwds.log 2>&1 &
 
 watch -n 1 nvidia-smi
