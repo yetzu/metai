@@ -123,11 +123,13 @@ case $MODE in
         python run/gan_scwds_simvp.py \
             --data_path data/samples.jsonl \
             --ckpt_path $BACKBONE_CKPT \
-            --batch_size 16 \
+            --batch_size 4 \
             --num_workers 8 \
             --max_epochs 50 \
-            --lr 0.0002 \
-            --lambda_adv 0.05 \
+            --lr 1e-4 \
+            --lambda_content 100.0 \
+            --lambda_adv 1.0 \
+            --lambda_fm 10.0 \
             --accelerator cuda \
             --devices 0,1,2,3
         ;;
