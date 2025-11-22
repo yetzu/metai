@@ -175,11 +175,8 @@ def calc_seq_metrics(true_seq, pred_seq, verbose=True):
     """
     T, H, W = true_seq.shape
     
-    # 1. 预处理：噪音过滤 (Post-Processing)
-    # 这一步对于获得 0mm 档的 0.1 分至关重要
+    # 1. 预处理：噪音过滤
     pred_clean = pred_seq.copy()
-    # 将归一化前的数值小于阈值的置为0
-    # 注意：pred_seq 是归一化后的 [0,1]，THRESHOLD_NOISE 是 mm
     pred_clean[pred_clean < (MetricConfig.THRESHOLD_NOISE / MetricConfig.MM_MAX)] = 0.0
     
     time_weights = MetricConfig.get_time_weights(T)
@@ -189,7 +186,6 @@ def calc_seq_metrics(true_seq, pred_seq, verbose=True):
     tru_mm_seq = np.clip(true_seq, 0.0, None) * MetricConfig.MM_MAX
     prd_mm_seq = np.clip(pred_clean, 0.0, None) * MetricConfig.MM_MAX
     
-    # 用于日志输出的累积变量
     ts_mean_levels = np.zeros(len(MetricConfig.LEVEL_WEIGHTS))
     mae_mm_mean_levels = np.zeros(len(MetricConfig.LEVEL_WEIGHTS))
     corr_sum = 0.0
@@ -197,94 +193,69 @@ def calc_seq_metrics(true_seq, pred_seq, verbose=True):
     if verbose:
         print(f"True Stats: Max={np.max(tru_mm_seq):.2f}, Mean={np.mean(tru_mm_seq):.2f}")
         print(f"Pred Stats: Max={np.max(prd_mm_seq):.2f}, Mean={np.mean(prd_mm_seq):.2f}")
-        print("-" * 80)
-        print(f"{'T':<3} | {'Corr(R)':<9} | {'TS_w_sum':<9} | {'Score_k':<9}")
-        print("-" * 80)
+        print("-" * 90) # 加长分隔线
+        # 增加 W_time 列
+        print(f"{'T':<3} | {'Corr(R)':<9} | {'TS_w_sum':<9} | {'Score_k':<9} | {'W_time':<8}")
+        print("-" * 90)
 
     for t in range(T):
         tru_frame = tru_mm_seq[t].reshape(-1)
         prd_frame = prd_mm_seq[t].reshape(-1)
         abs_err = np.abs(prd_frame - tru_frame)
 
-        # --- A. 计算相关系数 R_k (公式 6) ---
-        # 规则：观测值和预测值同时为0的格点，不参与计算
+        # --- A. 计算相关系数 R_k ---
         mask_valid_corr = (tru_frame > 0) | (prd_frame > 0)
-        
         if mask_valid_corr.sum() > 1:
             t_valid = tru_frame[mask_valid_corr]
             p_valid = prd_frame[mask_valid_corr]
-            
             numerator = np.sum((t_valid - t_valid.mean()) * (p_valid - p_valid.mean()))
             denom = np.sqrt(np.sum((t_valid - t_valid.mean())**2) * np.sum((p_valid - p_valid.mean())**2))
-            
             R_k = numerator / (denom + 1e-8)
         else:
-            # 如果全图双零，或只有一个点非零，无法计算相关性
-            # 视情况给 0.0 (保守)
             R_k = 0.0
-            
+        
         R_k = float(np.clip(R_k, -1.0, 1.0))
         corr_sum += R_k
-
-        # 计算 Score 公式第一项: sqrt(exp(R - 1))
         term_corr = np.sqrt(np.exp(R_k - 1.0))
 
         # --- B. 逐等级计算 TS 和 MAE ---
         weighted_sum_metrics = 0.0
-        
         for i in range(len(MetricConfig.LEVEL_WEIGHTS)):
             low = MetricConfig.LEVEL_EDGES[i]
             high = MetricConfig.LEVEL_EDGES[i+1]
             w_i = MetricConfig.LEVEL_WEIGHTS[i]
 
-            # 生成 Mask: [low, high)
-            # i=0 时对应 [0, 0.1)，即 0mm 档
             tru_bin = (tru_frame >= low) & (tru_frame < high)
             prd_bin = (prd_frame >= low) & (prd_frame < high)
             
-            # TS 计算
             tp = np.logical_and(tru_bin, prd_bin).sum()
-            fn = np.logical_and(tru_bin, ~prd_bin).sum() # 漏报
-            fp = np.logical_and(~tru_bin, prd_bin).sum() # 空报 (虚警)
-            
+            fn = np.logical_and(tru_bin, ~prd_bin).sum()
+            fp = np.logical_and(~tru_bin, prd_bin).sum()
             denom_ts = tp + fn + fp
-            # 特殊处理：分母为0说明该等级既没发生也没预报，视为正确(1.0)
             ts_val = (tp / denom_ts) if denom_ts > 0 else 1.0
             
-            # MAE 计算 (公式 5)
-            # 计算范围：命中该等级区域的并集 (只要真值或预报有一个落在该等级区间，就算误差)
             mask_eval = tru_bin | prd_bin
-            if mask_eval.sum() > 0:
-                mae_val = np.mean(abs_err[mask_eval])
-            else:
-                mae_val = 0.0
+            mae_val = np.mean(abs_err[mask_eval]) if mask_eval.sum() > 0 else 0.0
             
-            # 统计累加 (用于最终打印平均值)
             ts_mean_levels[i] += ts_val / T
             mae_mm_mean_levels[i] += mae_val / T
             
-            # Score 公式第二项: sqrt(exp(-MAE/100))
             term_mae = np.sqrt(np.exp(-mae_val / 100.0))
-            
-            # 加权累加
             weighted_sum_metrics += w_i * ts_val * term_mae
 
-        # --- C. 计算当前时刻 Score_k ---
+        # --- C. 计算 Score_k ---
         Score_k = term_corr * weighted_sum_metrics
         score_k_list.append(Score_k)
 
         if verbose:
-            # 仅打印部分信息防止刷屏
-            print(f"{t:<3} | {R_k:<9.4f} | {weighted_sum_metrics:<9.4f} | {Score_k:<9.4f}")
+            # 补全 W_time 打印
+            print(f"{t:<3} | {R_k:<9.4f} | {weighted_sum_metrics:<9.4f} | {Score_k:<9.4f} | {time_weights[t]:<8.4f}")
 
-    # ---- 4. 计算最终加权总分 ----
     score_k_arr = np.array(score_k_list)
     final_score = np.sum(score_k_arr * time_weights)
     
-    # 打印汇总日志
-    print("-" * 80)
+    print("-" * 90)
     labels = ["0mm", "0.1-1", "1-2", "2-5", "5-8", ">=8"]
-    
     ts_str = ", ".join([f"{v:.3f}" for v in ts_mean_levels])
     mae_str = ", ".join([f"{v:.3f}" for v in mae_mm_mean_levels])
     
@@ -292,12 +263,14 @@ def calc_seq_metrics(true_seq, pred_seq, verbose=True):
     print(f"[METRIC] MAE_mean (Levels): {mae_str}")
     print(f"[METRIC] Corr_mean: {corr_sum / T:.4f}")
     print(f"[METRIC] Final_Weighted_Score: {final_score:.6f}")
-    print("-" * 80)
+    # 补全 Score_per_t 打印 (非常重要，用于分析衰减)
+    print(f"[METRIC] Score_per_t: {', '.join([f'{s:.3f}' for s in score_k_arr])}")
+    print("-" * 90)
     
     return {
         "final_score": final_score,
         "score_per_frame": score_k_arr,
-        "pred_clean": pred_clean # 返回给绘图用
+        "pred_clean": pred_clean
     }
 
 # ==========================================

@@ -154,7 +154,8 @@ case $MODE in
             --data_path data/samples.testset.jsonl \
             --in_shape 20 28 256 256 \
             --save_dir ./output/simvp \
-            --accelerator cuda
+            --accelerator cuda \
+            --vis \
         ;;
     *)
         echo "错误: 不支持的操作模式 '$MODE'"

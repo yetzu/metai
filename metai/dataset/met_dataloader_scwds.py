@@ -79,6 +79,16 @@ class ScwdsDataModule(LightningDataModule):
 
     def setup(self, stage: Optional[str] = None):
         """设置数据集"""
+        if stage == "infer":
+            # 推理模式下，直接创建推理数据集，不需要进行 train/val/test 分割
+            self.infer_dataset = ScwdsDataset(
+                self.data_path, 
+                is_train=False
+            )
+            MLOGI(f"Infer dataset size: {len(self.infer_dataset)}")
+            return
+        
+        # 训练/验证/测试模式下，进行数据集分割
         if not hasattr(self, 'dataset'):
             self.dataset = ScwdsDataset(
                 data_path=self.data_path,
@@ -87,10 +97,20 @@ class ScwdsDataModule(LightningDataModule):
             
             total_size = len(self.dataset)
             
+            # 如果数据集为空或太小，跳过分割
+            if total_size == 0:
+                MLOGI("Warning: Dataset is empty, skipping split")
+                return
+            
             # 计算划分的尺寸
             train_size = int(self.train_split * total_size)
             val_size = int(self.val_split * total_size)
             test_size = total_size - train_size - val_size
+            
+            # 确保至少有一个样本在训练集中（如果数据集不为空）
+            if train_size == 0 and total_size > 0:
+                train_size = 1
+                test_size = total_size - train_size - val_size
             
             lengths = [train_size, val_size, test_size]
 
@@ -103,14 +123,6 @@ class ScwdsDataModule(LightningDataModule):
             )
             
             MLOGI(f"Dataset split: Train={len(self.train_dataset)}, Val={len(self.val_dataset)}, Test={len(self.test_dataset)}")
-
-        if stage == "infer":
-            # 创建推理数据集，使用infer模式
-            self.infer_dataset = ScwdsDataset(
-                self.data_path, 
-                is_train=False
-            )
-            MLOGI(f"Infer dataset size: {len(self.infer_dataset)}")
 
     def _interpolate_batch(self, batch_tensor: torch.Tensor, mode: str = 'bilinear') -> torch.Tensor:
         """
