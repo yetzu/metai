@@ -1,0 +1,16 @@
+# MetAI 配置文件
+
+# 路径配置
+root_path: "/data/zjobs/SevereWeather_AI_2025"
+
+# 地理数据路径
+gis_data_path: "/home/yyj/code/data/dem"
+
+# 文件格式配置
+file_date_format: "%Y%m%d-%H%M"
+
+# NWP文件前缀配置
+nwp_prefix: "ERA5"
+
+# 用户ID配置
+user_id: 'CP2025000081'
