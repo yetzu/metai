@@ -185,9 +185,27 @@ def main():
 
     # 7. Callbacks
     callbacks = [
-        EarlyStopping(monitor=config.early_stop_monitor, min_delta=config.early_stop_min_delta, patience=config.early_stop_patience, mode=config.early_stop_mode, verbose=True),
-        ModelCheckpoint(dirpath=config.save_dir, filename="{epoch:02d}-{val_loss:.4f}", monitor="val_loss", save_top_k=3, mode="min", save_last=True),
-        ModelCheckpoint(dirpath=config.save_dir, filename="{epoch:02d}", every_n_epochs=5, save_top_k=-1),  # 每5个epoch保存一次
+        EarlyStopping(
+            monitor=config.early_stop_monitor, 
+            min_delta=config.early_stop_min_delta, 
+            patience=config.early_stop_patience, 
+            mode=config.early_stop_mode, 
+            verbose=True
+        ),
+        ModelCheckpoint(
+            dirpath=config.save_dir, 
+            filename="{epoch:02d}-{val_score:.4f}",
+            monitor=config.early_stop_monitor,
+            save_top_k=3, 
+            mode=config.early_stop_mode,
+            save_last=True
+        ),
+        ModelCheckpoint(
+            dirpath=config.save_dir, 
+            filename="periodic-{epoch:02d}",
+            every_n_epochs=5, 
+            save_top_k=-1
+        ), 
         LearningRateMonitor(logging_interval="step")
     ]
 

@@ -15,10 +15,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 matplotlib.use('Agg')
 
 from metai.dataset.met_dataloader_scwds import ScwdsDataModule
-from metai.model.simvp import SimVPConfig
-from metai.model.simvp import SimVP
+from metai.model.simvp import SimVPConfig, SimVP
 
-# 创建中间色为 #30123B 的差异图 colormap
+# ==========================================
+# Part 0: 辅助工具函数
+# ==========================================
+
 def create_diff_cmap():
     """创建中间色为 #30123B 的差异图 colormap"""
     middle_color = (0.188, 0.071, 0.231, 1.0)
@@ -48,151 +50,44 @@ def find_best_ckpt(save_dir: str) -> str:
         raise FileNotFoundError(f'No checkpoint found in {save_dir}')
     return cpts[-1]
 
-
 def print_checkpoint_info(ckpt_path: str):
-    """
-    从 checkpoint 文件中提取并打印训练关键信息
-    用于 AI 协助分析模型训练状态
-    """
+    """从 checkpoint 文件中提取并打印训练关键信息"""
     try:
         ckpt = torch.load(ckpt_path, map_location='cpu')
-        
         print("=" * 80)
-        print("[CHECKPOINT INFO] 模型训练关键信息")
-        print("=" * 80)
+        print(f"[INFO] Loaded Checkpoint: {os.path.basename(ckpt_path)}")
+        print(f"  Epoch: {ckpt.get('epoch', 'N/A')}")
+        print(f"  Global Step: {ckpt.get('global_step', 'N/A')}")
         
-        # 1. 基本信息
-        epoch = ckpt.get('epoch', 'N/A')
-        global_step = ckpt.get('global_step', 'N/A')
-        print(f"  Epoch: {epoch}")
-        print(f"  Global Step: {global_step}")
-        
-        # 2. 超参数信息
         hparams = ckpt.get('hyper_parameters', {})
         if hparams:
-            print(f"\n[Hyperparameters]")
-            # 模型结构参数
-            model_keys = ['model_type', 'in_shape', 'hid_S', 'hid_T', 'N_S', 'N_T', 
-                         'mlp_ratio', 'drop', 'drop_path', 'spatio_kernel_enc', 'spatio_kernel_dec']
-            print(f"  模型结构:")
-            for key in model_keys:
-                if key in hparams:
-                    print(f"    {key}: {hparams[key]}")
-            
-            # 训练配置参数
-            train_keys = ['max_epochs', 'batch_size', 'learning_rate', 'weight_decay',
-                         'optimizer', 'scheduler', 'precision', 'accelerator']
-            print(f"  训练配置:")
-            for key in train_keys:
-                if key in hparams:
-                    print(f"    {key}: {hparams[key]}")
-            
-            # Loss 配置参数
-            loss_keys = ['l1_weight', 'bce_weight', 'loss_threshold', 'temporal_consistency_weight',
-                        'ssim_weight', 'positive_weight', 'sparsity_weight', 'use_curriculum_learning',
-                        'curriculum_warmup_epochs', 'curriculum_transition_epochs']
-            print(f"  损失函数配置:")
-            for key in loss_keys:
-                if key in hparams:
-                    print(f"    {key}: {hparams[key]}")
-        
-        # 3. 优化器状态信息
-        optimizer_states = ckpt.get('optimizer_states', [])
-        if optimizer_states:
-            print(f"\n[Optimizer States]")
-            print(f"  优化器数量: {len(optimizer_states)}")
-            if len(optimizer_states) > 0:
-                opt_state = optimizer_states[0]
-                if 'param_groups' in opt_state:
-                    param_groups = opt_state['param_groups']
-                    if len(param_groups) > 0:
-                        lr = param_groups[0].get('lr', 'N/A')
-                        print(f"  当前学习率: {lr}")
-        
-        # 4. 学习率调度器状态
-        lr_schedulers = ckpt.get('lr_schedulers', [])
-        if lr_schedulers:
-            print(f"\n[LR Scheduler States]")
-            print(f"  调度器数量: {len(lr_schedulers)}")
-            for i, scheduler_state in enumerate(lr_schedulers):
-                if isinstance(scheduler_state, dict):
-                    last_epoch = scheduler_state.get('last_epoch', 'N/A')
-                    print(f"  调度器 {i+1} - Last Epoch: {last_epoch}")
-        
-        # 5. Callback 状态 (ModelCheckpoint 可能保存最佳指标)
-        callbacks = ckpt.get('callbacks', {})
-        if callbacks:
-            print(f"\n[Callback States]")
-            for callback_name, callback_state in callbacks.items():
-                if isinstance(callback_state, dict):
-                    # 查找 ModelCheckpoint 的最佳指标
-                    if 'best_model_score' in callback_state:
-                        best_score = callback_state['best_model_score']
-                        monitor = callback_state.get('monitor', 'N/A')
-                        print(f"  {callback_name}:")
-                        print(f"    Monitor: {monitor}")
-                        print(f"    Best Score: {best_score}")
-        
-        # 6. 模型参数量统计
-        state_dict = ckpt.get('state_dict', {})
-        if state_dict:
-            total_params = 0
-            trainable_params = 0
-            for key, value in state_dict.items():
-                if isinstance(value, torch.Tensor):
-                    param_count = value.numel()
-                    total_params += param_count
-                    # 假设所有参数都是可训练的（实际可能需要检查 requires_grad）
-                    trainable_params += param_count
-            
-            print(f"\n[Model Statistics]")
-            print(f"  总参数量: {total_params:,} ({total_params / 1e6:.2f}M)")
-            print(f"  可训练参数量: {trainable_params:,} ({trainable_params / 1e6:.2f}M)")
-        
-        # 7. Checkpoint 文件信息
-        file_stat = os.stat(ckpt_path)
-        file_size_mb = file_stat.st_size / (1024 * 1024)
-        mod_time = datetime.fromtimestamp(file_stat.st_mtime)
-        print(f"\n[Checkpoint File]")
-        print(f"  文件路径: {ckpt_path}")
-        print(f"  文件大小: {file_size_mb:.2f} MB")
-        print(f"  修改时间: {mod_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # 8. 训练日志路径提示
-        save_dir = os.path.dirname(ckpt_path)
-        log_dir = os.path.join(save_dir, 'lightning_logs')
-        if os.path.exists(log_dir):
-            print(f"\n[Training Logs]")
-            print(f"  TensorBoard 日志目录: {log_dir}")
-            print(f"  可使用 'tensorboard --logdir {log_dir}' 查看训练曲线")
-        
+            print(f"  Model Type: {hparams.get('model_type', 'N/A')}")
+            print(f"  Hidden Dim (T): {hparams.get('hid_T', 'N/A')}")
         print("=" * 80)
-        print("[INFO] 以上信息可用于 AI 协助分析模型训练状态和性能")
-        print("=" * 80)
-        
     except Exception as e:
         print(f"[WARNING] 无法读取 checkpoint 信息: {e}")
-        import traceback
-        traceback.print_exc()
-
 
 # ==========================================
-# Part 1: 全局配置 (Configuration)
+# Part 1: 全局评分配置 (Metric Configuration)
 # ==========================================
 class MetricConfig:
-    # 反归一化参数
+    # 反归一化参数 (假设数据归一化时除以了30)
     MM_MAX = 30.0
-    # 噪音阈值
-    THRESHOLD_NOISE = 0.1 / 30.0
     
-    # 阈值边缘 (mm)
-    LEVEL_EDGES = np.array([0.01, 0.1, 1.0, 2.0, 5.0, 8.0], dtype=np.float32)
+    # 噪音阈值 (小于此值的预测视为0，用于拿到 0mm 档的 0.1 分)
+    # 0.05mm 是一个经验值，既能过滤浮点噪声，又不会误杀有效小雨
+    THRESHOLD_NOISE = 0.05 
     
-    # 降水等级权重 (需归一化)
+    # 阈值边缘 (mm) - 对应表2
+    # 区间: [0, 0.1), [0.1, 1.0), [1.0, 2.0), [2.0, 5.0), [5.0, 8.0), [8.0, inf)
+    LEVEL_EDGES = np.array([0.0, 0.1, 1.0, 2.0, 5.0, 8.0, np.inf], dtype=np.float32)
+    
+    # 降水等级权重 (表2)
     _raw_level_weights = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.3], dtype=np.float32)
+    # 归一化权重 (虽然原始和已为1，但保险起见)
     LEVEL_WEIGHTS = _raw_level_weights / _raw_level_weights.sum()
 
-    # 时效权重 (0-19)
+    # 时效权重 (表1) - 对应索引 0-19 (6min - 120min)
     TIME_WEIGHTS_DICT = {
         0: 0.0075, 1: 0.02, 2: 0.03, 3: 0.04, 4: 0.05,
         5: 0.06, 6: 0.07, 7: 0.08, 8: 0.09, 9: 0.1,
@@ -206,149 +101,153 @@ class MetricConfig:
         if T == 20:
             return np.array([MetricConfig.TIME_WEIGHTS_DICT[t] for t in range(T)], dtype=np.float32)
         else:
+            # 如果 T 不是 20，使用均匀权重兜底
+            print(f"[WARN] T={T}, expected 20. Using uniform time weights.")
             return np.ones(T, dtype=np.float32) / T
 
 # ==========================================
-# Part 2: 统计指标计算函数 (Metrics)
+# Part 2: 核心统计计算 (Core Metrics)
 # ==========================================
 def calc_seq_metrics(true_seq, pred_seq, verbose=True):
     """
-    计算序列的降水评分指标
-    ... (内部逻辑保持不变，假设TS, MAE, Corr计算正确)
+    计算序列的降水评分指标 (Strict implementation of Contest Rules)
     """
     T, H, W = true_seq.shape
     
-    # 预处理：噪音过滤
+    # 1. 预处理：噪音过滤 (Post-Processing)
+    # 这一步对于获得 0mm 档的 0.1 分至关重要
     pred_clean = pred_seq.copy()
-    pred_clean[pred_clean < MetricConfig.THRESHOLD_NOISE] = 0.0
+    # 将归一化前的数值小于阈值的置为0
+    # 注意：pred_seq 是归一化后的 [0,1]，THRESHOLD_NOISE 是 mm
+    pred_clean[pred_clean < (MetricConfig.THRESHOLD_NOISE / MetricConfig.MM_MAX)] = 0.0
     
     time_weights = MetricConfig.get_time_weights(T)
     score_k_list = []
     
-    # 用于日志输出的累积变量 (为简洁省略其初始化，但应在代码中存在)
-    ts_mean_levels = np.zeros(len(MetricConfig.LEVEL_EDGES))
-    mae_mm_mean_levels = np.zeros(len(MetricConfig.LEVEL_EDGES))
-    corr_mean_sum = 0.0
-
-    # 截断负值
-    tru_clipped = np.clip(true_seq, 0.0, None)
-    prd_clipped = np.clip(pred_clean, 0.0, None)
-
-    print(f"tru: {np.max(tru_clipped)}, {np.min(tru_clipped)}, {np.mean(tru_clipped)}")
-    print(f"prd: {np.max(prd_clipped)}, {np.min(prd_clipped)}, {np.mean(prd_clipped)}")
+    # 反归一化到 mm 并截断负值
+    tru_mm_seq = np.clip(true_seq, 0.0, None) * MetricConfig.MM_MAX
+    prd_mm_seq = np.clip(pred_clean, 0.0, None) * MetricConfig.MM_MAX
+    
+    # 用于日志输出的累积变量
+    ts_mean_levels = np.zeros(len(MetricConfig.LEVEL_WEIGHTS))
+    mae_mm_mean_levels = np.zeros(len(MetricConfig.LEVEL_WEIGHTS))
+    corr_sum = 0.0
 
     if verbose:
+        print(f"True Stats: Max={np.max(tru_mm_seq):.2f}, Mean={np.mean(tru_mm_seq):.2f}")
+        print(f"Pred Stats: Max={np.max(prd_mm_seq):.2f}, Mean={np.mean(prd_mm_seq):.2f}")
         print("-" * 80)
-        print(f"Metric Calculation | T={T} | True Max: {true_seq.max()*MetricConfig.MM_MAX:.2f}mm")
-        print(f"{'T':<3} | {'Corr(R_k)':<9} | {'TS_w_sum':<9} | {'MAE_w_sum':<9} | {'Score_k':<9} | {'W_time':<6}")
+        print(f"{'T':<3} | {'Corr(R)':<9} | {'TS_w_sum':<9} | {'Score_k':<9}")
         print("-" * 80)
 
     for t in range(T):
-        # 1. 准备数据 (转为mm)
-        tru_frame = tru_clipped[t].reshape(-1)
-        prd_frame = prd_clipped[t].reshape(-1)
-        tru_mm = tru_frame * MetricConfig.MM_MAX
-        prd_mm = prd_frame * MetricConfig.MM_MAX
-        abs_err = np.abs(prd_mm - tru_mm)
+        tru_frame = tru_mm_seq[t].reshape(-1)
+        prd_frame = prd_mm_seq[t].reshape(-1)
+        abs_err = np.abs(prd_frame - tru_frame)
 
-        # 2. 计算 Corr (R_k) (公式 6)
-        tru_mean = tru_frame.mean()
-        prd_mean = prd_frame.mean()
-        tru_center = tru_frame - tru_mean
-        prd_center = prd_frame - prd_mean
+        # --- A. 计算相关系数 R_k (公式 6) ---
+        # 规则：观测值和预测值同时为0的格点，不参与计算
+        mask_valid_corr = (tru_frame > 0) | (prd_frame > 0)
         
-        numerator = np.dot(tru_center, prd_center)
-        sum_tru_sq = np.sum(tru_center ** 2)
-        sum_prd_sq = np.sum(prd_center ** 2)
-        denom = np.sqrt(sum_tru_sq * sum_prd_sq) + 1e-8
-        
-        if sum_tru_sq == 0 and sum_prd_sq == 0:
-            corr_t = 1.0
-        elif sum_tru_sq == 0 or sum_prd_sq == 0:
-            corr_t = 0.0
+        if mask_valid_corr.sum() > 1:
+            t_valid = tru_frame[mask_valid_corr]
+            p_valid = prd_frame[mask_valid_corr]
+            
+            numerator = np.sum((t_valid - t_valid.mean()) * (p_valid - p_valid.mean()))
+            denom = np.sqrt(np.sum((t_valid - t_valid.mean())**2) * np.sum((p_valid - p_valid.mean())**2))
+            
+            R_k = numerator / (denom + 1e-8)
         else:
-            corr_t = numerator / denom
-        corr_t = float(np.clip(corr_t, -1.0, 1.0))
-        corr_mean_sum += corr_t # 累加相关系数
+            # 如果全图双零，或只有一个点非零，无法计算相关性
+            # 视情况给 0.0 (保守)
+            R_k = 0.0
+            
+        R_k = float(np.clip(R_k, -1.0, 1.0))
+        corr_sum += R_k
 
-        # 3. 逐等级计算 TS 和 MAE
-        ts_levels = []
-        mae_term_levels = [] 
+        # 计算 Score 公式第一项: sqrt(exp(R - 1))
+        term_corr = np.sqrt(np.exp(R_k - 1.0))
 
-        for i, threshold in enumerate(MetricConfig.LEVEL_EDGES):
-            tru_bin = tru_mm >= threshold
-            prd_bin = prd_mm >= threshold
+        # --- B. 逐等级计算 TS 和 MAE ---
+        weighted_sum_metrics = 0.0
+        
+        for i in range(len(MetricConfig.LEVEL_WEIGHTS)):
+            low = MetricConfig.LEVEL_EDGES[i]
+            high = MetricConfig.LEVEL_EDGES[i+1]
+            w_i = MetricConfig.LEVEL_WEIGHTS[i]
+
+            # 生成 Mask: [low, high)
+            # i=0 时对应 [0, 0.1)，即 0mm 档
+            tru_bin = (tru_frame >= low) & (tru_frame < high)
+            prd_bin = (prd_frame >= low) & (prd_frame < high)
             
             # TS 计算
             tp = np.logical_and(tru_bin, prd_bin).sum()
-            fp = np.logical_and(~tru_bin, prd_bin).sum()
-            fn = np.logical_and(tru_bin, ~prd_bin).sum()
-            denom_ts = tp + fp + fn
+            fn = np.logical_and(tru_bin, ~prd_bin).sum() # 漏报
+            fp = np.logical_and(~tru_bin, prd_bin).sum() # 空报 (虚警)
+            
+            denom_ts = tp + fn + fp
+            # 特殊处理：分母为0说明该等级既没发生也没预报，视为正确(1.0)
             ts_val = (tp / denom_ts) if denom_ts > 0 else 1.0
-            ts_levels.append(ts_val)
-
-            # MAE 计算 (有效区域)
-            mask_valid = (tru_mm >= threshold) | (prd_mm >= threshold)
-            current_mae = abs_err[mask_valid].mean() if mask_valid.sum() > 0 else 0.0
             
-            # MAE Term (公式 3 右侧 exp 项)
-            mae_term = np.sqrt(np.exp(-current_mae / 100.0))
-            mae_term_levels.append(mae_term)
+            # MAE 计算 (公式 5)
+            # 计算范围：命中该等级区域的并集 (只要真值或预报有一个落在该等级区间，就算误差)
+            mask_eval = tru_bin | prd_bin
+            if mask_eval.sum() > 0:
+                mae_val = np.mean(abs_err[mask_eval])
+            else:
+                mae_val = 0.0
             
-            # 累加用于最终平均值的统计 (匹配旧日志格式)
+            # 统计累加 (用于最终打印平均值)
             ts_mean_levels[i] += ts_val / T
-            mae_mm_mean_levels[i] += current_mae / T 
+            mae_mm_mean_levels[i] += mae_val / T
+            
+            # Score 公式第二项: sqrt(exp(-MAE/100))
+            term_mae = np.sqrt(np.exp(-mae_val / 100.0))
+            
+            # 加权累加
+            weighted_sum_metrics += w_i * ts_val * term_mae
 
+        # --- C. 计算当前时刻 Score_k ---
+        Score_k = term_corr * weighted_sum_metrics
+        score_k_list.append(Score_k)
 
-        ts_levels = np.array(ts_levels)
-        mae_term_levels = np.array(mae_term_levels)
-
-        # 4. 组合 Score_k (公式 3)
-        term_corr = np.sqrt(np.exp(corr_t)) # 假设 Ra_k = corr_t - 1.0 + 1.0 = corr_t
-        term_weighted = np.sum(MetricConfig.LEVEL_WEIGHTS * ts_levels * mae_term_levels)
-        score_k = term_corr * term_weighted
-        score_k_list.append(score_k)
-
-        # 5. 打印单帧日志 (保持原样)
         if verbose:
-            ts_show = np.sum(ts_levels * MetricConfig.LEVEL_WEIGHTS)
-            mae_show = np.sum(mae_term_levels * MetricConfig.LEVEL_WEIGHTS)
-            print(f"{t:<3} | {corr_t:<9.4f} | {ts_show:<9.4f} | {mae_show:<9.4f} | {score_k:<9.4f} | {time_weights[t]:<6.4f}")
+            # 仅打印部分信息防止刷屏
+            print(f"{t:<3} | {R_k:<9.4f} | {weighted_sum_metrics:<9.4f} | {Score_k:<9.4f}")
 
+    # ---- 4. 计算最终加权总分 ----
     score_k_arr = np.array(score_k_list)
     final_score = np.sum(score_k_arr * time_weights)
-
-    # 打印匹配旧日志格式的统计信息
-    corr_mean = corr_mean_sum / T
+    
+    # 打印汇总日志
     print("-" * 80)
-    # 打印格式与旧日志保持一致
-    print(f"[METRIC] TS_mean@>=0.01/...: {ts_mean_levels[0]:.3f}, {ts_mean_levels[1]:.3f}, {ts_mean_levels[2]:.3f}, {ts_mean_levels[3]:.3f}, {ts_mean_levels[4]:.3f}, {ts_mean_levels[5]:.3f}")
-    print(f"[METRIC] MAE_mm_mean@>=0.01/...: {mae_mm_mean_levels[0]:.3f}, {mae_mm_mean_levels[1]:.3f}, {mae_mm_mean_levels[2]:.3f}, {mae_mm_mean_levels[3]:.3f}, {mae_mm_mean_levels[4]:.3f}, {mae_mm_mean_levels[5]:.3f}")
-    print(f"[METRIC] Corr_mean: {corr_mean:.3f}")
-    print(f"[METRIC] Final_Weighted_Score: {final_score:.4f}")
-    print(f"[METRIC] Score_per_t: {', '.join([f'{s:.3f}' for s in score_k_arr])}")
+    labels = ["0mm", "0.1-1", "1-2", "2-5", "5-8", ">=8"]
+    
+    ts_str = ", ".join([f"{v:.3f}" for v in ts_mean_levels])
+    mae_str = ", ".join([f"{v:.3f}" for v in mae_mm_mean_levels])
+    
+    print(f"[METRIC] TS_mean  (Levels): {ts_str}")
+    print(f"[METRIC] MAE_mean (Levels): {mae_str}")
+    print(f"[METRIC] Corr_mean: {corr_sum / T:.4f}")
+    print(f"[METRIC] Final_Weighted_Score: {final_score:.6f}")
     print("-" * 80)
     
     return {
         "final_score": final_score,
         "score_per_frame": score_k_arr,
-        "pred_clean": pred_clean # 返回处理过噪音的预测值供绘图使用
+        "pred_clean": pred_clean # 返回给绘图用
     }
 
 # ==========================================
-# Part 3: 绘图功能函数 (Visualization)
+# Part 3: 绘图功能 (Visualization)
 # ==========================================
 def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1.0):
-    """
-    绘制 Obs, GT, Pred, Diff 对比图
-    ... (逻辑保持不变)
-    """
+    """绘制 Obs, GT, Pred, Diff 对比图"""
     T = true_seq.shape[0]
-    rows = 4
-    cols = T
+    rows, cols = 4, T
     
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.5, rows * 1.5), constrained_layout=True)
-    
     if T == 1: axes = axes[:, np.newaxis]
 
     for t in range(T):
@@ -375,11 +274,6 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
         axes[3, t].imshow(diff, cmap='bwr', vmin=-0.5, vmax=0.5)
         axes[3, t].axis('off')
         if t == 0: axes[3, t].set_title('Diff', fontsize=8)
-        
-        # # 标注分数
-        # if scores is not None:
-        #     axes[3, t].text(0.5, -0.15, f"S:{scores[t]:.2f}", 
-        #                     transform=axes[3, t].transAxes, ha='center', fontsize=7, color='black')
 
     print(f'[INFO] Saving Plot to {out_path}')
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -390,11 +284,6 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
 # Part 4: 主入口函数 (Wrapper)
 # ==========================================
 def render(obs_seq, true_seq, pred_seq, out_path: str, vmax: float = 1.0):
-    """
-    整合计算与绘图的主函数
-    ... (逻辑保持不变)
-    """
-    
     # 1. 数据格式统一 (转 Numpy & 提取通道)
     def to_numpy_ch(x, ch=0):
         if isinstance(x, torch.Tensor): x = x.detach().cpu().numpy()
@@ -411,125 +300,79 @@ def render(obs_seq, true_seq, pred_seq, out_path: str, vmax: float = 1.0):
     metrics_res = calc_seq_metrics(tru, prd, verbose=True)
     
     final_score = metrics_res['final_score']
-    scores_arr = metrics_res['score_per_frame']
-    pred_clean = metrics_res['pred_clean'] # 获取去噪后的预测值用于画图
     
     # 3. 调用绘图模块
-    plot_seq_visualization(obs, tru, pred_clean, scores_arr, out_path, vmax=vmax)
+    plot_seq_visualization(obs, tru, metrics_res['pred_clean'], metrics_res['score_per_frame'], out_path, vmax=vmax)
     
     return final_score
 
-
 def parse_args():
-    """解析命令行参数"""
     parser = argparse.ArgumentParser(description='Test SCWDS SimVP Model')
-    
-    # 基础参数
-    parser.add_argument('--data_path', type=str, default='data/samples.jsonl', help='Path to test data')
-    parser.add_argument('--in_shape', type=int, nargs=4, default=[20, 28, 128, 128], help='Input shape: T C H W')
-    parser.add_argument('--save_dir', type=str, default='./output/simvp', help='Directory where model checkpoints are saved')
-    parser.add_argument('--num_samples', type=int, default=10, help='Number of samples to visualize')
-    parser.add_argument('--accelerator', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Accelerator to run inference on (e.g., cuda, cpu, cuda:0)')
-    
+    parser.add_argument('--data_path', type=str, default='data/samples.jsonl')
+    parser.add_argument('--in_shape', type=int, nargs=4, default=[20, 28, 128, 128])
+    parser.add_argument('--save_dir', type=str, default='./output/simvp')
+    parser.add_argument('--num_samples', type=int, default=10)
+    parser.add_argument('--accelerator', type=str, default='cuda')
+    parser.add_argument('--device', type=str, default='cuda') 
     return parser.parse_args()
 
 def main():
-    # 解析命令行参数
     args = parse_args()
+    device = torch.device(args.accelerator if torch.cuda.is_available() else 'cpu')
     
-    # 构建配置（与训练保持一致）
-    config_kwargs = {
-        'data_path': args.data_path,
-        'in_shape': tuple(args.in_shape),
-        'save_dir': args.save_dir,
-    }
+    print(f"[INFO] Starting Test on {device}")
     
-    config = SimVPConfig(**config_kwargs)
-    
-    # 从配置中获取参数
+    # 1. Config & Model
+    config = SimVPConfig(
+        data_path=args.data_path,
+        in_shape=tuple(args.in_shape),
+        save_dir=args.save_dir
+    )
     resize_shape = (config.in_shape[2], config.in_shape[3])
-    device = torch.device(args.accelerator)
     
-    print(f"[INFO] 测试配置:")
-    # ... (省略日志打印)
+    ckpt_path = find_best_ckpt(config.save_dir)
+    print_checkpoint_info(ckpt_path)
     
-    # 数据集
+    # 加载模型
+    model = SimVP.load_from_checkpoint(ckpt_path)
+    model.eval().to(device)
+    
+    # 2. Data
     data_module = ScwdsDataModule(
         data_path=config.data_path,
         resize_shape=resize_shape,
-        batch_size=1, # 推理/测试阶段单批次通常设为 1
-        num_workers=1
+        batch_size=1,
+        num_workers=4
     )
-    # 强制 setup test 阶段
     data_module.setup('test')
     test_loader = data_module.test_dataloader()
-    assert test_loader is not None
     
-    # 加载模型
-    ckpt_path = find_best_ckpt(config.save_dir)
-    print(f"[INFO] 加载检查点: {ckpt_path}")
-    
-    # 打印 checkpoint 中的训练关键信息
-    print_checkpoint_info(ckpt_path)
-    
-    # 注意: SimVP.load_from_checkpoint 必须能找到 SimVPConfig 中的所有参数
-    model: SimVP = SimVP.load_from_checkpoint(ckpt_path)
-    model.eval().to(device)
-
-    # 简单可视化若干batch（仅展示每个batch的第一个样本）
-    out_dir = os.path.join(config.save_dir, 'vis')
+    # 3. Loop
+    out_dir = os.path.join(config.save_dir, 'vis_final_v2')
     os.makedirs(out_dir, exist_ok=True)
-    print(f"[INFO] 可视化结果将保存到: {out_dir}")
-
-    # 收集所有样本的 Score_mean
-    score_mean_list = []
-
+    
+    scores = []
+    
     with torch.no_grad():
-        # 修正: test_loader 迭代时接收 5 个元素
         for bidx, batch in enumerate(test_loader):
-            # 解包 5 个元素: metadata, x, y, target_mask, input_mask
             metadata_batch, batch_x, batch_y, target_mask, input_mask = batch
             
-            # 移到设备上
-            batch_x = batch_x.to(device) 
-            batch_y = batch_y.to(device) 
-            target_mask = target_mask.to(device)
-            input_mask = input_mask.to(device)
+            # Inference
+            outputs = model.test_step(
+                (metadata_batch, batch_x.to(device), batch_y.to(device), target_mask.to(device), input_mask.to(device)), 
+                bidx
+            )
             
-            # test_step 期望接收 5 元素 (metadata, x, y, target_mask, input_mask)
-            test_batch_tuple = (metadata_batch, batch_x, batch_y, target_mask, input_mask)
+            # Render
+            save_path = os.path.join(out_dir, f'sample_{bidx:03d}.png')
+            s = render(outputs['inputs'], outputs['trues'], outputs['preds'], save_path)
+            scores.append(s)
             
-            # 调用 test_step
-            outputs = model.test_step(test_batch_tuple, bidx)
-            
-            # 从outputs中提取数据
-            obs_seq = outputs['inputs'] 
-            true_seq = outputs['trues'] 
-            pred_seq = outputs['preds'] 
-            
-            print(f'[INFO] Batch {bidx}: obs_seq.shape = {obs_seq.shape}, true_seq.shape = {true_seq.shape}, pred_seq.shape = {pred_seq.shape}')
-            
-            # 如果数据是 (T, H, W) 形状（缺少通道维度），添加通道维度 (适配 render 函数)
-            if len(obs_seq.shape) == 3: obs_seq = obs_seq[:, np.newaxis, :, :]
-            if len(true_seq.shape) == 3: true_seq = true_seq[:, np.newaxis, :, :]
-            if len(pred_seq.shape) == 3: pred_seq = pred_seq[:, np.newaxis, :, :]
-
-            out_path = os.path.join(out_dir, f'sample_{bidx:04d}.png')
-            score_mean = render(obs_seq, true_seq, pred_seq, out_path, vmax=1.0)
-            score_mean_list.append(score_mean)
-            
-            # 仅示例输出指定数量的样本
             if bidx >= args.num_samples - 1:
                 break
     
-    # 计算所有样本的平均 Score
-    if len(score_mean_list) > 0:
-        overall_score = np.mean(score_mean_list)
-        print(f"\n[FINAL] 所有样本的平均 Score: {overall_score:.6f}")
-        print(f"[FINAL] 共处理 {len(score_mean_list)} 个样本")
-    
-    print(f"[INFO] 测试完成！共生成 {len(score_mean_list)} 个可视化样本")
-
+    if len(scores) > 0:
+        print(f"\n[FINAL] Average Score ({len(scores)} samples): {np.mean(scores):.6f}")
 
 if __name__ == '__main__':
     main()

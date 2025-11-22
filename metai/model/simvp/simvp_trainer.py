@@ -229,7 +229,6 @@ class SimVP(l.LightningModule):
         # 记录加权 TS 作为验证指标 (越大越好)
         val_score = ts_sum / sum(weights)
 
-        
         self.log('val_loss', loss, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log('val_mae', mae, on_epoch=True, sync_dist=True)
         self.log('val_score', val_score, on_epoch=True, prog_bar=True, sync_dist=True)
