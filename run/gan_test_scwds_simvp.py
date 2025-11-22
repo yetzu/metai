@@ -7,7 +7,6 @@ import matplotlib
 import matplotlib.pyplot as plt
 import argparse
 import numpy as np
-from datetime import datetime
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,25 +50,43 @@ class MetricConfig:
 def find_best_ckpt(save_dir: str) -> str:
     """查找 GAN 训练生成的最佳 checkpoint"""
     # 优先找 best.ckpt
-    best = os.path.join(save_dir, 'checkpoints', 'last.ckpt') # 优先看 last，因为 GAN 训练波动大
-    if os.path.exists(best):
-        return best
-    
-    # 否则找最新的
+    # 注意：GAN 训练脚本中 ModelCheckpoint 保存路径通常在 checkpoints 子目录
     ckpt_dir = os.path.join(save_dir, 'checkpoints')
-    if os.path.exists(ckpt_dir):
-        cpts = sorted(glob.glob(os.path.join(ckpt_dir, '*.ckpt')), key=os.path.getmtime)
-        if len(cpts) > 0:
-            print(f"[INFO] Found checkpoints in {ckpt_dir}: {[os.path.basename(c) for c in cpts]}")
-            return cpts[-1]
+    if not os.path.exists(ckpt_dir):
+        ckpt_dir = save_dir # 兼容旧结构
 
-    # 尝试在上级目录找
-    cpts = sorted(glob.glob(os.path.join(save_dir, '*.ckpt')), key=os.path.getmtime)
-    if len(cpts) == 0:
-        raise FileNotFoundError(f'No checkpoint found in {save_dir}')
+    # 尝试找 last.ckpt (GAN 训练波动大，last 往往具有最新状态)
+    last = os.path.join(ckpt_dir, 'last.ckpt')
+    if os.path.exists(last):
+        print(f"[INFO] Found last checkpoint: {last}")
+        return last
     
-    print(f"[INFO] Found checkpoints in {save_dir}: {[os.path.basename(c) for c in cpts]}")
+    # 否则按时间排序找最新的
+    cpts = sorted(glob.glob(os.path.join(ckpt_dir, '*.ckpt')), key=os.path.getmtime)
+    if len(cpts) > 0:
+        print(f"[INFO] Found checkpoints in {ckpt_dir}: {[os.path.basename(c) for c in cpts]}")
+        return cpts[-1]
+
+    if len(cpts) == 0:
+        raise FileNotFoundError(f'No checkpoint found in {save_dir} or {ckpt_dir}')
+    
     return cpts[-1]
+
+def get_checkpoint_info(ckpt_path: str):
+    """从 checkpoint 文件中提取训练关键信息（不打印）"""
+    try:
+        ckpt = torch.load(ckpt_path, map_location='cpu')
+        epoch = ckpt.get('epoch', None)
+        global_step = ckpt.get('global_step', None)
+        hparams = ckpt.get('hyper_parameters', {})
+        return {
+            'epoch': epoch,
+            'global_step': global_step,
+            'hparams': hparams,
+            'ckpt_name': os.path.basename(ckpt_path)
+        }
+    except Exception as e:
+        return {'error': str(e)}
 
 # ==========================================
 # Part 2: 统计指标计算函数 (Metrics)
@@ -220,13 +237,13 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
         # 3. Pred
         axes[2, t].imshow(pred_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
         axes[2, t].axis('off')
-        if t == 0: axes[2, t].set_title('Pred', fontsize=8)
+        if t == 0: axes[2, t].set_title('Pred (GAN)', fontsize=8)
         
         # 4. Diff (GT - Pred)
         diff = true_seq[t] - pred_seq[t]
         axes[3, t].imshow(diff, cmap='bwr', vmin=-0.5, vmax=0.5)
         axes[3, t].axis('off')
-        if t == 0: axes[3, t].set_title('Diff', fontsize=8)
+        if t == 0: axes[3, t].set_title(f'Diff\nS:{scores[t]:.2f}', fontsize=8)
 
     print(f'[INFO] Saving Plot to {out_path}')
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -306,53 +323,84 @@ def main():
         resize_shape=resize_shape, 
         batch_size=1, 
         num_workers=1,
-        test_split=0.2,
+        test_split=0.2, # 与训练时保持一致
     )
     data_module.setup(stage='test')
     test_loader = data_module.test_dataloader()
 
-    # 3. 推理循环
-    vis_folder = f'vis_results_{datetime.now().strftime("%m%d_%H%M")}'
-    out_dir = os.path.join(args.save_dir, vis_folder)
+    # 3. 获取 checkpoint 信息并创建输出目录
+    ckpt_info = get_checkpoint_info(ckpt_path)
+    epoch = ckpt_info.get('epoch', None)
+    
+    # 如果无法从 checkpoint 获取 epoch，使用默认值
+    if epoch is None:
+        epoch = 0
+    
+    # 创建输出目录，使用 vis_{epoch} 格式
+    out_dir = os.path.join(args.save_dir, f'vis_{epoch}')
     os.makedirs(out_dir, exist_ok=True)
+    
+    # 保存日志到文件
+    log_file = os.path.join(out_dir, 'log.txt')
+    print(f"[INFO] Log file: {log_file}")
+    print(f"[INFO] Output directory: {out_dir}")
+    print(f"[INFO] Checkpoint epoch: {epoch}")
     
     score_mean_list = []
     processed_count = 0
     
-    with torch.no_grad():
-        for bidx, batch in enumerate(test_loader):
-            metadata_batch, x_raw, y_raw, _, _ = batch # 注意这里解包可能有5个元素
-            
-            x_raw = x_raw.to(device)
-            y_raw = y_raw.to(device)
-            
-            # 同样需要手动插值，因为 GAN 的 training_step 里手动做了
-            x = model.backbone._interpolate_batch_gpu(x_raw, mode='max_pool')
-            y = model.backbone._interpolate_batch_gpu(y_raw, mode='max_pool')
-            
-            # 前向传播 (GAN forward 会自动调用 backbone + refiner)
-            y_pred = model(x)
-            
-            # 准备数据给 render
-            # x: (1, T, C, H, W)
-            obs_np = x[0].cpu().float()
-            tru_np = y[0].cpu().float()
-            prd_np = y_pred[0].cpu().float()
-            
-            sample_id = metadata_batch[0].get('sample_id', f'sample_{bidx}')
-            out_path = os.path.join(out_dir, f'{sample_id}.png')
-            
-            print(f"Processing {bidx+1}/{args.num_samples}: {sample_id}")
-            score = render(obs_np, tru_np, prd_np, out_path)
-            score_mean_list.append(score)
-            
-            processed_count += 1
-            if processed_count >= args.num_samples:
-                break
+    with open(log_file, 'w') as f:
+        # 重定向 stdout 到文件和控制台
+        class Tee(object):
+            def __init__(self, *files): self.files = files
+            def write(self, obj):
+                for f in self.files:
+                    f.write(obj)
+                    f.flush() # ensure print immediately
+            def flush(self):
+                for f in self.files: f.flush()
+        
+        original_stdout = sys.stdout
+        sys.stdout = Tee(sys.stdout, f)
 
-    if len(score_mean_list) > 0:
-        print(f"\n[FINAL] Average Score: {np.mean(score_mean_list):.6f}")
-        print(f"[INFO] Visualizations saved to: {out_dir}")
+        try:
+            with torch.no_grad():
+                for bidx, batch in enumerate(test_loader):
+                    metadata_batch, x_raw, y_raw, _, _ = batch # 注意这里解包可能有5个元素
+                    
+                    x_raw = x_raw.to(device)
+                    y_raw = y_raw.to(device)
+                    
+                    # 同样需要手动插值，因为 GAN 的 training_step 里手动做了
+                    x = model.backbone._interpolate_batch_gpu(x_raw, mode='max_pool')
+                    y = model.backbone._interpolate_batch_gpu(y_raw, mode='max_pool')
+                    
+                    # 前向传播 (GAN forward 会自动调用 backbone + refiner)
+                    y_pred = model(x)
+                    
+                    # 准备数据给 render
+                    # x: (1, T, C, H, W)
+                    obs_np = x[0].cpu().float()
+                    tru_np = y[0].cpu().float()
+                    prd_np = y_pred[0].cpu().float()
+                    
+                    # 使用 sample_{bidx:03d}.png 格式命名
+                    out_path = os.path.join(out_dir, f'sample_{bidx:03d}.png')
+                    
+                    print(f"Processing {bidx+1}/{args.num_samples}: sample_{bidx:03d}")
+                    score = render(obs_np, tru_np, prd_np, out_path)
+                    score_mean_list.append(score)
+                    
+                    processed_count += 1
+                    if processed_count >= args.num_samples:
+                        break
+
+            if len(score_mean_list) > 0:
+                print(f"\n[FINAL] Average Score: {np.mean(score_mean_list):.6f}")
+                print(f"[INFO] Visualizations saved to: {out_dir}")
+                
+        finally:
+            sys.stdout = original_stdout
 
 if __name__ == '__main__':
     main()

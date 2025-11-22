@@ -24,7 +24,7 @@ from metai.utils.met_config import get_config
 
 # 竞赛常量
 USER_ID = "CP2025000081"  # 请确保这是正确的选手ID
-TRACK_ID = "TestSet"
+TRACK_ID = "SimVP"
 TIME_STEP_MINUTES = 6 
 
 def find_latest_ckpt(save_dir: str) -> str:

@@ -120,7 +120,7 @@ case $MODE in
 
         mkdir -p ./output/simvp_gan
 
-        python run/gan_scwds_simvp.py \
+        python run/gan_train_scwds_simvp.py \
             --data_path data/samples.jsonl \
             --ckpt_path $BACKBONE_CKPT \
             --batch_size 4 \
@@ -139,7 +139,7 @@ case $MODE in
         echo "🧪 开始测试 GAN 模型..."
         echo "----------------------------------------"
         
-        python run/test_gan_scwds_simvp.py \
+        python run/gan_test_scwds_simvp.py \
             --data_path data/samples.jsonl \
             --save_dir ./output/simvp_gan \
             --num_samples 10 \

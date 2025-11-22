@@ -174,7 +174,7 @@ class SimVP_GAN(l.LightningModule):
 
     def training_step(self, batch, batch_idx):
         opt_g, opt_d = self.optimizers()
-        _, x, y, _ = batch
+        _, x, y, _, _ = batch
         
         # 确保输入尺寸正确
         x = self.backbone._interpolate_batch_gpu(x, mode='max_pool')
@@ -262,7 +262,7 @@ class SimVP_GAN(l.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         # 验证逻辑
-        _, x, y, _ = batch
+        _, x, y, _, _ = batch
         x = self.backbone._interpolate_batch_gpu(x, mode='max_pool')
         y = self.backbone._interpolate_batch_gpu(y, mode='max_pool')
         

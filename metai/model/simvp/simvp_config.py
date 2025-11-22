@@ -94,7 +94,7 @@ class SimVPConfig(BaseModel):
     early_stop_monitor: str = Field(default="val_score", description="监控指标")
     early_stop_mode: str = Field(default="max", description="早停模式: min 或 max") # 需要在 Config 类中添加此字段
     early_stop_min_delta: float = Field(default=1e-4, description="最小改善阈值")
-    early_stop_patience: int = Field(default=50, description="容忍 Epoch 数")
+    early_stop_patience: int = Field(default=30, description="容忍 Epoch 数")
 
     # 8. 优化器与调度器
     opt: str = Field(default="adamw", description="优化器: adamw, adam, sgd")
