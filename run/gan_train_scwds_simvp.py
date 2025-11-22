@@ -53,10 +53,10 @@ def main():
     logger = TensorBoardLogger("output", name="simvp_gan")
     checkpoint_callback = ModelCheckpoint(
         dirpath="output/simvp_gan/checkpoints",
-        filename="{epoch:02d}-{val_mae:.4f}",
-        monitor="val_mae",
-        mode="min",
-        save_top_k=3,
+        filename="{epoch:02d}-{val_score:.4f}",
+        monitor="val_score",
+        mode="max",
+        save_top_k=5,
         save_last=True
     )
     

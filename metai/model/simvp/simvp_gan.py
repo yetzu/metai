@@ -192,12 +192,44 @@ class SimVP_GAN(l.LightningModule):
         self.untoggle_optimizer(opt_g)
 
     def validation_step(self, batch, batch_idx):
+        # 1. 数据准备
         _, x, y, _ = batch
         x = self.backbone._interpolate_batch_gpu(x, mode='max_pool')
         y = self.backbone._interpolate_batch_gpu(y, mode='max_pool')
-        y_pred = self(x)
+        
+        # 2. 前向传播 (Backbone + Refiner)
+        y_pred = self(x) # 这里的 output 已经是 [0, 1] 范围
+        
+        # 3. 计算基础指标 MAE (保留作为参考)
         val_mae = F.l1_loss(y_pred, y)
+        
+        # 4. 计算综合评分 (val_score) - 核心修改
+        # 反归一化 (0-1 -> 0-30mm)
+        MM_MAX = 30.0
+        pred_mm = torch.clamp(y_pred, 0.0, 1.0) * MM_MAX
+        target_mm = y * MM_MAX
+        
+        # 评分规则 (与竞赛标准对齐)
+        # 阈值: 0.01(无雨), 0.1(微量), 1.0(小雨), 2.0(中雨), 5.0(大雨), 8.0(暴雨)
+        thresholds = [0.01, 0.1, 1.0, 2.0, 5.0, 8.0] 
+        # 权重: 暴雨权重最高(0.3)
+        weights =    [0.1,  0.1, 0.1, 0.2, 0.2, 0.3] 
+        
+        ts_sum = 0.0
+        for t, w in zip(thresholds, weights):
+            # 计算 TS (Threat Score)
+            hits = ((pred_mm >= t) & (target_mm >= t)).float().sum()
+            misses = ((pred_mm < t) & (target_mm >= t)).float().sum()
+            false_alarms = ((pred_mm >= t) & (target_mm < t)).float().sum()
+            
+            ts = hits / (hits + misses + false_alarms + 1e-6)
+            ts_sum += ts * w
+            
+        val_score = ts_sum / sum(weights)
+
+        # 5. 记录日志
         self.log("val_mae", val_mae, on_epoch=True, sync_dist=True)
+        self.log("val_score", val_score, on_epoch=True, sync_dist=True) # 新增
 
     def configure_optimizers(self):
         lr = self.hparams.lr

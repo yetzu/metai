@@ -25,11 +25,11 @@ class MetConfig:
     is_debug: bool = False
     
     # 路径配置
-    root_path: str = "/home/dataset-assist-1/SevereWeather_AI_2025"
+    root_path: str = "/home/dataset-local/SevereWeather_AI_2025"
     
     # 地理数据路径
     # gis_data_path: str = "/home/yyj/code/data/dem"
-    gis_data_path: str = "/home/dataset-assist-0/code/data/dem"
+    gis_data_path: str = "/home/dataset-local/SevereWeather_AI_2025/dem"
 
     # 文件格式配置
     file_date_format: str = "%m%d-%H%M"
