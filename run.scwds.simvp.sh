@@ -63,13 +63,13 @@ case $MODE in
             --spatio_kernel_dec 5 \
             \
             --positive_weight 30.0 \
-            --sparsity_weight 5.0 \
+            --sparsity_weight 2.0 \
             --l1_weight 5 \
             --bce_weight 8.0 \
             --ssim_weight 0.5 \
-            --temporal_consistency_weight 0.1 \
             --temporal_weight_enabled true \
-            --temporal_weight_max 2.0 \
+            --temporal_weight_max 5.0 \
+            --temporal_consistency_weight 0.0 \
             --loss_threshold 0.01 \
             --use_threshold_weights \
             --use_composite_loss true \
@@ -127,7 +127,7 @@ case $MODE in
             --num_workers 8 \
             --max_epochs 50 \
             --lr 0.0002 \
-            --lambda_adv 0.01 \
+            --lambda_adv 0.05 \
             --accelerator cuda \
             --devices 0,1,2,3
         ;;

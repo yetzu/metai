@@ -231,6 +231,7 @@ def main():
                 seq_mean_val /= len(batch_y)
                 zero_ratio = seq_zero_count / seq_total_count if seq_total_count > 0 else 0.0
                 MLOGI(f"No.{bidx} {sample_id} | Max: {seq_max_val:.2f}mm | Mean: {seq_mean_val:.4f}mm | Zero: {zero_ratio:.2%}")
+                
                 # 7. 执行可视化
                 if args.vis:
                     # 获取输入序列 (Rain Channel is 0)

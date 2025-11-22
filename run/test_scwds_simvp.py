@@ -347,7 +347,6 @@ def parse_args():
     parser.add_argument('--save_dir', type=str, default='./output/simvp')
     parser.add_argument('--num_samples', type=int, default=10)
     parser.add_argument('--accelerator', type=str, default='cuda')
-    parser.add_argument('--device', type=str, default='cuda') 
     return parser.parse_args()
 
 def main():
