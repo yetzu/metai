@@ -128,7 +128,7 @@ case $MODE in
             --max_epochs 50 \
             --lr 1e-4 \
             --lambda_content 100.0 \
-            --lambda_adv 1.0 \
+            --lambda_adv 0.01 \
             --lambda_fm 10.0 \
             --accelerator cuda \
             --devices 0,1,2,3
