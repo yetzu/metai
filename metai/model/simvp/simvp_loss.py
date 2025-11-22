@@ -126,6 +126,8 @@ class SparsePrecipitationLoss(nn.Module):
         self.use_ssim = False
         if self.ssim_weight is not None and self.ssim_weight > 0 and TORCHMETRICS_AVAILABLE:
             self.use_ssim = True
+            # Type assertion: MultiScaleStructuralSimilarityIndexMeasure is guaranteed to be available here
+            assert MultiScaleStructuralSimilarityIndexMeasure is not None, "MultiScaleStructuralSimilarityIndexMeasure should be available when TORCHMETRICS_AVAILABLE is True"
             self.ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(
                 data_range=1.0, kernel_size=7, betas=(0.0448, 0.2856, 0.3001, 0.2363, 0.1333)[:3], normalize="relu"
             )

@@ -90,7 +90,9 @@ class SimVPConfig(BaseModel):
     curriculum_transition_epochs: int = Field(default=10, description="过渡阶段 Epoch 数")
 
     # 7. 早停 (Early Stopping)
-    early_stop_monitor: str = Field(default="val_mae", description="监控指标")
+    # early_stop_monitor: str = Field(default="val_mae", description="监控指标")
+    early_stop_monitor: str = Field(default="val_score", description="监控指标")
+    early_stop_mode: str = Field(default="max", description="早停模式: min 或 max") # 需要在 Config 类中添加此字段
     early_stop_min_delta: float = Field(default=1e-4, description="最小改善阈值")
     early_stop_patience: int = Field(default=50, description="容忍 Epoch 数")
 

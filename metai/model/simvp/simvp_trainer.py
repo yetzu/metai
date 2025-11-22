@@ -195,7 +195,6 @@ class SimVP(l.LightningModule):
         y = self._interpolate_batch_gpu(y, mode='max_pool')
         target_mask = self._interpolate_batch_gpu(target_mask, mode='nearest')
         
-        # 🚨 [关键修正 2]: 模型输出 Logits Z
         logits_pred = self(x)
         
         # 计算 Pred (用于 MAE/MSE 指标记录)
@@ -206,12 +205,34 @@ class SimVP(l.LightningModule):
         loss = self.criterion(logits_pred, y, target_mask=target_mask)
         
         # 指标计算使用 clamped Pred
-        mse = F.mse_loss(y_pred_clamped, y)
         mae = F.l1_loss(y_pred_clamped, y)
+
+        # === 新增：计算简化的加权 TS Score ===
+        # 反归一化 (假设 max=30.0, 根据您的 test 代码)
+        MM_MAX = 30.0
+        pred_mm = y_pred_clamped * MM_MAX
+        target_mm = y * MM_MAX
+        
+        # 选取关键阈值 (如竞赛规则)
+        thresholds = [0.01, 0.1, 1.0, 2.0, 5.0, 8.0] 
+        weights = [0.1, 0.1, 0.1, 0.2, 0.2, 0.3] # 给予强降水更高权重
+        ts_sum = 0.0
+        
+        for t, w in zip(thresholds, weights):
+            # 计算 TS
+            hits = ((pred_mm >= t) & (target_mm >= t)).float().sum()
+            misses = ((pred_mm < t) & (target_mm >= t)).float().sum()
+            false_alarms = ((pred_mm >= t) & (target_mm < t)).float().sum()
+            ts = hits / (hits + misses + false_alarms + 1e-6)
+            ts_sum += ts * w
+            
+        # 记录加权 TS 作为验证指标 (越大越好)
+        val_score = ts_sum / sum(weights)
+
         
         self.log('val_loss', loss, on_epoch=True, prog_bar=True, sync_dist=True)
-        self.log('val_mse', mse, on_epoch=True, sync_dist=True)
         self.log('val_mae', mae, on_epoch=True, sync_dist=True)
+        self.log('val_score', val_score, on_epoch=True, prog_bar=True, sync_dist=True)
     
     def on_test_epoch_start(self):
         self.test_outputs = []

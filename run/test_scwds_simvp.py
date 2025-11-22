@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import argparse
 import numpy as np
+from datetime import datetime
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -46,6 +47,133 @@ def find_best_ckpt(save_dir: str) -> str:
     if len(cpts) == 0:
         raise FileNotFoundError(f'No checkpoint found in {save_dir}')
     return cpts[-1]
+
+
+def print_checkpoint_info(ckpt_path: str):
+    """
+    从 checkpoint 文件中提取并打印训练关键信息
+    用于 AI 协助分析模型训练状态
+    """
+    try:
+        ckpt = torch.load(ckpt_path, map_location='cpu')
+        
+        print("=" * 80)
+        print("[CHECKPOINT INFO] 模型训练关键信息")
+        print("=" * 80)
+        
+        # 1. 基本信息
+        epoch = ckpt.get('epoch', 'N/A')
+        global_step = ckpt.get('global_step', 'N/A')
+        print(f"  Epoch: {epoch}")
+        print(f"  Global Step: {global_step}")
+        
+        # 2. 超参数信息
+        hparams = ckpt.get('hyper_parameters', {})
+        if hparams:
+            print(f"\n[Hyperparameters]")
+            # 模型结构参数
+            model_keys = ['model_type', 'in_shape', 'hid_S', 'hid_T', 'N_S', 'N_T', 
+                         'mlp_ratio', 'drop', 'drop_path', 'spatio_kernel_enc', 'spatio_kernel_dec']
+            print(f"  模型结构:")
+            for key in model_keys:
+                if key in hparams:
+                    print(f"    {key}: {hparams[key]}")
+            
+            # 训练配置参数
+            train_keys = ['max_epochs', 'batch_size', 'learning_rate', 'weight_decay',
+                         'optimizer', 'scheduler', 'precision', 'accelerator']
+            print(f"  训练配置:")
+            for key in train_keys:
+                if key in hparams:
+                    print(f"    {key}: {hparams[key]}")
+            
+            # Loss 配置参数
+            loss_keys = ['l1_weight', 'bce_weight', 'loss_threshold', 'temporal_consistency_weight',
+                        'ssim_weight', 'positive_weight', 'sparsity_weight', 'use_curriculum_learning',
+                        'curriculum_warmup_epochs', 'curriculum_transition_epochs']
+            print(f"  损失函数配置:")
+            for key in loss_keys:
+                if key in hparams:
+                    print(f"    {key}: {hparams[key]}")
+        
+        # 3. 优化器状态信息
+        optimizer_states = ckpt.get('optimizer_states', [])
+        if optimizer_states:
+            print(f"\n[Optimizer States]")
+            print(f"  优化器数量: {len(optimizer_states)}")
+            if len(optimizer_states) > 0:
+                opt_state = optimizer_states[0]
+                if 'param_groups' in opt_state:
+                    param_groups = opt_state['param_groups']
+                    if len(param_groups) > 0:
+                        lr = param_groups[0].get('lr', 'N/A')
+                        print(f"  当前学习率: {lr}")
+        
+        # 4. 学习率调度器状态
+        lr_schedulers = ckpt.get('lr_schedulers', [])
+        if lr_schedulers:
+            print(f"\n[LR Scheduler States]")
+            print(f"  调度器数量: {len(lr_schedulers)}")
+            for i, scheduler_state in enumerate(lr_schedulers):
+                if isinstance(scheduler_state, dict):
+                    last_epoch = scheduler_state.get('last_epoch', 'N/A')
+                    print(f"  调度器 {i+1} - Last Epoch: {last_epoch}")
+        
+        # 5. Callback 状态 (ModelCheckpoint 可能保存最佳指标)
+        callbacks = ckpt.get('callbacks', {})
+        if callbacks:
+            print(f"\n[Callback States]")
+            for callback_name, callback_state in callbacks.items():
+                if isinstance(callback_state, dict):
+                    # 查找 ModelCheckpoint 的最佳指标
+                    if 'best_model_score' in callback_state:
+                        best_score = callback_state['best_model_score']
+                        monitor = callback_state.get('monitor', 'N/A')
+                        print(f"  {callback_name}:")
+                        print(f"    Monitor: {monitor}")
+                        print(f"    Best Score: {best_score}")
+        
+        # 6. 模型参数量统计
+        state_dict = ckpt.get('state_dict', {})
+        if state_dict:
+            total_params = 0
+            trainable_params = 0
+            for key, value in state_dict.items():
+                if isinstance(value, torch.Tensor):
+                    param_count = value.numel()
+                    total_params += param_count
+                    # 假设所有参数都是可训练的（实际可能需要检查 requires_grad）
+                    trainable_params += param_count
+            
+            print(f"\n[Model Statistics]")
+            print(f"  总参数量: {total_params:,} ({total_params / 1e6:.2f}M)")
+            print(f"  可训练参数量: {trainable_params:,} ({trainable_params / 1e6:.2f}M)")
+        
+        # 7. Checkpoint 文件信息
+        file_stat = os.stat(ckpt_path)
+        file_size_mb = file_stat.st_size / (1024 * 1024)
+        mod_time = datetime.fromtimestamp(file_stat.st_mtime)
+        print(f"\n[Checkpoint File]")
+        print(f"  文件路径: {ckpt_path}")
+        print(f"  文件大小: {file_size_mb:.2f} MB")
+        print(f"  修改时间: {mod_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 8. 训练日志路径提示
+        save_dir = os.path.dirname(ckpt_path)
+        log_dir = os.path.join(save_dir, 'lightning_logs')
+        if os.path.exists(log_dir):
+            print(f"\n[Training Logs]")
+            print(f"  TensorBoard 日志目录: {log_dir}")
+            print(f"  可使用 'tensorboard --logdir {log_dir}' 查看训练曲线")
+        
+        print("=" * 80)
+        print("[INFO] 以上信息可用于 AI 协助分析模型训练状态和性能")
+        print("=" * 80)
+        
+    except Exception as e:
+        print(f"[WARNING] 无法读取 checkpoint 信息: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ==========================================
@@ -248,10 +376,10 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
         axes[3, t].axis('off')
         if t == 0: axes[3, t].set_title('Diff', fontsize=8)
         
-        # 标注分数
-        if scores is not None:
-            axes[3, t].text(0.5, -0.15, f"S:{scores[t]:.2f}", 
-                            transform=axes[3, t].transAxes, ha='center', fontsize=7, color='black')
+        # # 标注分数
+        # if scores is not None:
+        #     axes[3, t].text(0.5, -0.15, f"S:{scores[t]:.2f}", 
+        #                     transform=axes[3, t].transAxes, ha='center', fontsize=7, color='black')
 
     print(f'[INFO] Saving Plot to {out_path}')
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -340,6 +468,10 @@ def main():
     # 加载模型
     ckpt_path = find_best_ckpt(config.save_dir)
     print(f"[INFO] 加载检查点: {ckpt_path}")
+    
+    # 打印 checkpoint 中的训练关键信息
+    print_checkpoint_info(ckpt_path)
+    
     # 注意: SimVP.load_from_checkpoint 必须能找到 SimVPConfig 中的所有参数
     model: SimVP = SimVP.load_from_checkpoint(ckpt_path)
     model.eval().to(device)
