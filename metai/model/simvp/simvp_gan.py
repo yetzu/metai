@@ -7,7 +7,7 @@ import lightning as l
 from metai.model.simvp import SimVP
 
 # ===========================
-# 1. 3D 视频判别器 (Video Discriminator)
+# 1. 3D 视频判别器 (Video Discriminator) - 保持不变
 # ===========================
 class VideoDiscriminator(nn.Module):
     def __init__(self, in_channels=1):
@@ -44,7 +44,7 @@ class VideoDiscriminator(nn.Module):
         return out
 
 # ===========================
-# 2. 时序感知 Refiner (Sequence-to-Sequence UNet)
+# 2. 时序感知 Refiner - 保持不变
 # ===========================
 class SequenceRefiner(nn.Module):
     def __init__(self, in_channels=20, out_channels=20, base_filters=64):
@@ -108,16 +108,27 @@ class SequenceRefiner(nn.Module):
         return out
 
 # ===========================
-# 3. Lightning Module (ST-cGAN) - 修复版
+# 3. Lightning Module (ST-cGAN) - 支持课程学习
 # ===========================
 class SimVP_GAN(l.LightningModule):
     def __init__(self, backbone_ckpt_path, lr=1e-4, 
-                 lambda_adv=1.0, lambda_content=100.0, lambda_fm=10.0):
+                 # 初始参数 (Safe Mode)
+                 lambda_adv=0.01, 
+                 lambda_content=1000.0, 
+                 lambda_fm=10.0,
+                 # 课程学习配置
+                 use_curriculum=True,
+                 curr_start_epoch=10,       # 第 10 个 Epoch 开始变化
+                 curr_transition_epochs=10, # 过渡期 10 个 Epoch (10->20)
+                 target_lambda_adv=0.1,     # 最终目标：增强对抗 (0.01 -> 0.1)
+                 target_lambda_content=100.0, # 最终目标：放宽约束 (1000 -> 100)
+                 target_lambda_fm=20.0      # 最终目标：增强纹理 (10 -> 20)
+                 ):
         super().__init__()
         self.save_hyperparameters()
         self.automatic_optimization = False 
 
-        # A. 加载骨干网络
+        # A. 加载 SimVP Backbone
         print(f"[GAN] Loading Backbone from: {backbone_ckpt_path}")
         self.backbone = SimVP.load_from_checkpoint(backbone_ckpt_path)
         self.backbone.freeze() 
@@ -128,16 +139,52 @@ class SimVP_GAN(l.LightningModule):
         self.refiner = SequenceRefiner(in_channels=20, out_channels=20, base_filters=64)
         self.discriminator = VideoDiscriminator(in_channels=1)
 
+        # C. 初始化当前权重 (Instance Variables)
+        self.curr_adv = lambda_adv
+        self.curr_content = lambda_content
+        self.curr_fm = lambda_fm
+
+    def on_train_epoch_start(self):
+        """课程学习核心逻辑：动态调整权重"""
+        if not self.hparams.use_curriculum:
+            return
+
+        epoch = self.current_epoch
+        start = self.hparams.curr_start_epoch
+        duration = self.hparams.curr_transition_epochs
+        
+        # 计算进度 (0.0 -> 1.0)
+        if epoch < start:
+            progress = 0.0
+        elif epoch >= start + duration:
+            progress = 1.0
+        else:
+            progress = (epoch - start) / duration
+            
+        # 线性插值更新权重
+        self.curr_adv = self.hparams.lambda_adv + progress * (self.hparams.target_lambda_adv - self.hparams.lambda_adv)
+        self.curr_content = self.hparams.lambda_content + progress * (self.hparams.target_lambda_content - self.hparams.lambda_content)
+        self.curr_fm = self.hparams.lambda_fm + progress * (self.hparams.target_lambda_fm - self.hparams.lambda_fm)
+        
+        # 打印日志 (防止刷屏，仅在关键节点或每轮开始打印)
+        if self.trainer.is_global_zero:
+            print(f"\n[Curriculum] Epoch {epoch} (Progress {progress:.2f}): "
+                  f"Content={self.curr_content:.1f}, Adv={self.curr_adv:.3f}, FM={self.curr_fm:.1f}")
+            
+        # 记录到 TensorBoard
+        self.log("train/weight_content", self.curr_content, on_epoch=True)
+        self.log("train/weight_adv", self.curr_adv, on_epoch=True)
+        self.log("train/weight_fm", self.curr_fm, on_epoch=True)
+
     def forward(self, x):
         # 推理逻辑
         with torch.no_grad():
-            coarse_logits = self.backbone(x) # (B, T, 1, H, W)
-            coarse_pred = torch.sigmoid(coarse_logits) # 🚨 修复: 先 Sigmoid 转为概率
+            coarse_logits = self.backbone(x) 
+            coarse_pred = torch.sigmoid(coarse_logits) 
         
         B, T, C, H, W = coarse_pred.shape
-        coarse_seq = coarse_pred.squeeze(2) # (B, T, H, W)
+        coarse_seq = coarse_pred.squeeze(2) 
         
-        # Refiner 在 [0,1] 图像域上工作
         residual = self.refiner(coarse_seq)
         
         fine_seq = coarse_seq + residual
@@ -146,26 +193,22 @@ class SimVP_GAN(l.LightningModule):
 
     def training_step(self, batch, batch_idx):
         opt_g, opt_d = self.optimizers()
-        # 🚨 确保解包正确 (5个元素)
+        # 解包
         _, x, y, _, _ = batch
         
         x = self.backbone._interpolate_batch_gpu(x, mode='max_pool')
         y = self.backbone._interpolate_batch_gpu(y, mode='max_pool')
 
-        # 准备真值视频: (B, 1, T, H, W)
+        # 准备真值视频
         real_video = y.permute(0, 2, 1, 3, 4) 
 
         # === 生成阶段 ===
         with torch.no_grad():
             coarse_logits = self.backbone(x) 
-            # 🚨 修复: Logits -> Probabilities (Image)
             coarse_seq = torch.sigmoid(coarse_logits).squeeze(2)
         
-        # Refiner 生成残差
         residual = self.refiner(coarse_seq)
         fake_seq = torch.clamp(coarse_seq + residual, 0.0, 1.0)
-        
-        # 准备假视频: (B, 1, T, H, W)
         fake_video = fake_seq.unsqueeze(1).permute(0, 1, 2, 3, 4)
 
         # ==========================
@@ -183,7 +226,7 @@ class SimVP_GAN(l.LightningModule):
         self.untoggle_optimizer(opt_d)
 
         # ==========================
-        # 2. 训练生成器
+        # 2. 训练生成器 (使用动态权重)
         # ==========================
         self.toggle_optimizer(opt_g)
         pred_fake, fake_feats = self.discriminator(fake_video, return_feats=True)
@@ -204,14 +247,14 @@ class SimVP_GAN(l.LightningModule):
         pixel_weight = 1.0 + 20.0 * rain_mask + 50.0 * heavy_rain_mask
         g_content_loss = torch.mean(torch.abs(fake_seq - target_seq) * pixel_weight)
         
-        g_loss = (self.hparams.lambda_content * g_content_loss) + \
-                 (self.hparams.lambda_adv * g_adv_loss) + \
-                 (self.hparams.lambda_fm * g_fm_loss)
+        # 🚨 关键点：使用 self.curr_* 动态权重
+        g_loss = (self.curr_content * g_content_loss) + \
+                 (self.curr_adv * g_adv_loss) + \
+                 (self.curr_fm * g_fm_loss)
         
         self.log("train/g_loss", g_loss, prog_bar=True)
         self.log("train/g_content", g_content_loss)
         self.log("train/g_adv", g_adv_loss)
-        self.log("train/g_fm", g_fm_loss)
         
         self.manual_backward(g_loss)
         opt_g.step()
@@ -219,23 +262,18 @@ class SimVP_GAN(l.LightningModule):
         self.untoggle_optimizer(opt_g)
 
     def validation_step(self, batch, batch_idx):
-        # 解包修正
         _, x, y, _, _ = batch
         x = self.backbone._interpolate_batch_gpu(x, mode='max_pool')
         y = self.backbone._interpolate_batch_gpu(y, mode='max_pool')
-        
-        y_pred = self(x) # Forward 已经修复，这里输出 [0, 1]
-        
+        y_pred = self(x) 
         val_mae = F.l1_loss(y_pred, y)
         
         # TS Score 计算
         MM_MAX = 30.0
         pred_mm = y_pred * MM_MAX
         target_mm = y * MM_MAX
-        
         thresholds = [0.01, 0.1, 1.0, 2.0, 5.0, 8.0] 
         weights =    [0.1,  0.1, 0.1, 0.2, 0.2, 0.3] 
-        
         ts_sum = 0.0
         for t, w in zip(thresholds, weights):
             hits = ((pred_mm >= t) & (target_mm >= t)).float().sum()

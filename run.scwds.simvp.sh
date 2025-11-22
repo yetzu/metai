@@ -123,7 +123,7 @@ case $MODE in
         python run/gan_train_scwds_simvp.py \
             --data_path data/samples.jsonl \
             --ckpt_path $BACKBONE_CKPT \
-            --batch_size 8 \
+            --batch_size 16 \
             --num_workers 8 \
             --max_epochs 50 \
             --lr 1e-4 \
