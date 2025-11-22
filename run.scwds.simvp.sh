@@ -46,35 +46,37 @@ case $MODE in
             --in_shape 20 28 256 256 \
             --max_epochs 100 \
             --opt adamw \
-            --lr 3e-4 \
+            --lr 1e-4 \
             --sched cosine \
             --min_lr 1e-6 \
             --warmup_epoch 5 \
             \
             --model_type tau \
             --hid_S 128 \
-            --hid_T 640 \
+            --hid_T 512 \
             --N_S 4 \
-            --N_T 16 \
-            --mlp_ratio 8.0 \
-            --drop 0.0 \
+            --N_T 12 \
+            --mlp_ratio 4.0 \
+            --drop 0.1 \
             --drop_path 0.1 \
             --spatio_kernel_enc 5 \
             --spatio_kernel_dec 5 \
             \
-            --positive_weight 100.0 \
-            --sparsity_weight 10.0 \
+            --positive_weight 30.0 \
+            --sparsity_weight 5.0 \
             --l1_weight 5 \
             --bce_weight 8.0 \
-            --ssim_weight 0.3 \
+            --ssim_weight 0.5 \
             --temporal_consistency_weight 0.1 \
+            --temporal_weight_enabled true \
+            --temporal_weight_max 2.0 \
             --loss_threshold 0.01 \
             --use_threshold_weights \
             --use_composite_loss true \
             \
             --use_curriculum_learning true \
             --curriculum_warmup_epochs 5 \
-            --curriculum_transition_epochs 10 \
+            --curriculum_transition_epochs 20 \
             \
             --accelerator cuda \
             --devices 0,1,2,3 \
