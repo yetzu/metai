@@ -7,7 +7,6 @@ import lightning as l
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 
-# 路径修正
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from metai.dataset.met_dataloader_scwds import ScwdsDataModule
@@ -18,12 +17,14 @@ def main():
     # 数据参数
     parser.add_argument('--data_path', type=str, default='data/samples.jsonl')
     parser.add_argument('--ckpt_path', type=str, required=True, help='Path to pre-trained SimVP checkpoint')
-    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--batch_size', type=int, default=4) # ST-cGAN 显存占用较高，建议默认减小Batch
     parser.add_argument('--num_workers', type=int, default=8)
     
-    # GAN 参数
-    parser.add_argument('--lr', type=float, default=2e-4)
-    parser.add_argument('--lambda_adv', type=float, default=0.01, help='Weight for adversarial loss')
+    # GAN 参数 (根据 ST-cGAN 优化建议调整默认值)
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument('--lambda_adv', type=float, default=1.0, help='Weight for adversarial loss')
+    parser.add_argument('--lambda_content', type=float, default=100.0, help='Weight for masked content loss')
+    parser.add_argument('--lambda_fm', type=float, default=10.0, help='Weight for feature matching loss')
     parser.add_argument('--max_epochs', type=int, default=50)
     
     # 硬件参数
@@ -46,11 +47,14 @@ def main():
     model = SimVP_GAN(
         backbone_ckpt_path=args.ckpt_path,
         lr=args.lr,
-        lambda_adv=args.lambda_adv
+        lambda_adv=args.lambda_adv,
+        lambda_content=args.lambda_content,
+        lambda_fm=args.lambda_fm
     )
     
     # 3. Logger & Callbacks
     logger = TensorBoardLogger("output", name="simvp_gan")
+
     checkpoint_callback = ModelCheckpoint(
         dirpath="output/simvp_gan/checkpoints",
         filename="{epoch:02d}-{val_score:.4f}",
@@ -73,7 +77,8 @@ def main():
         log_every_n_steps=10
     )
     
-    print(f"🚀 Starting GAN Fine-tuning with Backbone: {args.ckpt_path}")
+    print(f"🚀 Starting ST-cGAN Fine-tuning with Backbone: {args.ckpt_path}")
+    print(f"   Config: Content={args.lambda_content}, Adv={args.lambda_adv}, FM={args.lambda_fm}")
     trainer.fit(model, data_module)
 
 if __name__ == '__main__':

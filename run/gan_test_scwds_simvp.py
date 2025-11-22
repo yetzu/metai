@@ -7,6 +7,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import argparse
 import numpy as np
+from datetime import datetime
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,6 +15,38 @@ matplotlib.use('Agg')
 
 from metai.dataset.met_dataloader_scwds import ScwdsDataModule
 from metai.model.simvp import SimVP_GAN  # <--- 注意这里导入的是 GAN 模型
+
+# ==========================================
+# Part 1: 全局配置 (Configuration) - 同步自 test_scwds_simvp.py
+# ==========================================
+class MetricConfig:
+    # 反归一化参数
+    MM_MAX = 30.0
+    # 噪音阈值 (过滤掉微小的预测噪音)
+    THRESHOLD_NOISE = 0.1 / 30.0
+    
+    # 阈值边缘 (mm)
+    LEVEL_EDGES = np.array([0.01, 0.1, 1.0, 2.0, 5.0, 8.0], dtype=np.float32)
+    
+    # 降水等级权重 (需归一化)
+    _raw_level_weights = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.3], dtype=np.float32)
+    LEVEL_WEIGHTS = _raw_level_weights / _raw_level_weights.sum()
+
+    # 时效权重 (0-19)
+    TIME_WEIGHTS_DICT = {
+        0: 0.0075, 1: 0.02, 2: 0.03, 3: 0.04, 4: 0.05,
+        5: 0.06, 6: 0.07, 7: 0.08, 8: 0.09, 9: 0.1,
+        10: 0.09, 11: 0.08, 12: 0.07, 13: 0.06, 14: 0.05,
+        15: 0.04, 16: 0.03, 17: 0.02, 18: 0.0075, 19: 0.005
+    }
+
+    @staticmethod
+    def get_time_weights(T):
+        """根据序列长度T获取时效权重"""
+        if T == 20:
+            return np.array([MetricConfig.TIME_WEIGHTS_DICT[t] for t in range(T)], dtype=np.float32)
+        else:
+            return np.ones(T, dtype=np.float32) / T
 
 def find_best_ckpt(save_dir: str) -> str:
     """查找 GAN 训练生成的最佳 checkpoint"""
@@ -24,205 +57,207 @@ def find_best_ckpt(save_dir: str) -> str:
     
     # 否则找最新的
     ckpt_dir = os.path.join(save_dir, 'checkpoints')
-    cpts = sorted(glob.glob(os.path.join(ckpt_dir, '*.ckpt')), key=os.path.getmtime)
+    if os.path.exists(ckpt_dir):
+        cpts = sorted(glob.glob(os.path.join(ckpt_dir, '*.ckpt')), key=os.path.getmtime)
+        if len(cpts) > 0:
+            print(f"[INFO] Found checkpoints in {ckpt_dir}: {[os.path.basename(c) for c in cpts]}")
+            return cpts[-1]
+
+    # 尝试在上级目录找
+    cpts = sorted(glob.glob(os.path.join(save_dir, '*.ckpt')), key=os.path.getmtime)
     if len(cpts) == 0:
-        # 尝试在上级目录找
-        cpts = sorted(glob.glob(os.path.join(save_dir, '*.ckpt')), key=os.path.getmtime)
-        if len(cpts) == 0:
-            raise FileNotFoundError(f'No checkpoint found in {save_dir}')
+        raise FileNotFoundError(f'No checkpoint found in {save_dir}')
     
-    print(f"[INFO] Found checkpoints: {[os.path.basename(c) for c in cpts]}")
+    print(f"[INFO] Found checkpoints in {save_dir}: {[os.path.basename(c) for c in cpts]}")
     return cpts[-1]
 
-import numpy as np
-import matplotlib.pyplot as plt
-import os
-
-def render(obs_seq, true_seq, pred_seq, out_path: str, vmax: float = 1.0):
-    # obs_seq/true_seq/pred_seq: (T, C, H, W) or (T, 1, H, W) with same C
-    T, C, H, W = obs_seq.shape
-    ch = 0
-    obs = obs_seq[:, ch]
-    tru = true_seq[:, ch]
-    prd = pred_seq[:, ch]
-
-    print(f"tru: {np.max(tru)}, {np.min(tru)}, {np.mean(tru)}")
-    print(f"prd: {np.max(prd)}, {np.min(prd)}, {np.mean(prd)}")
-
-    # ---- 1. 定义时效权重 (表1) ----
-    # 对应 1-20 个时效 (6min - 120min)
-    time_weights_dict = {
-        0: 0.0075, 1: 0.02, 2: 0.03, 3: 0.04, 4: 0.05,
-        5: 0.06, 6: 0.07, 7: 0.08, 8: 0.09, 9: 0.1,
-        10: 0.09, 11: 0.08, 12: 0.07, 13: 0.06, 14: 0.05,
-        15: 0.04, 16: 0.03, 17: 0.02, 18: 0.0075, 19: 0.005
-    }
-    # 确保 T=20，如果 T 不同需做相应截取或处理
-    if T == 20:
-        time_weights = np.array([time_weights_dict[t] for t in range(T)], dtype=np.float32)
-    else:
-        # 如果 T 不是 20，暂时使用均值权重或报错，这里做归一化处理兜底
-        print(f"Warning: T={T}, expected 20 for standard weights. Using uniform weights.")
-        time_weights = np.ones(T, dtype=np.float32) / T
-
-    # ---- 2. 定义要素分级及权重 (表2) ----
-    # 表格中有 6 行：0mm, 0.1..., 1.0..., 2.0..., 5.0..., >=8mm
-    # TS评分通常基于阈值（>=Threshold）。我们将"0mm"视为全场降水/无降水判断(>=0.01近似)
-    # 阈值边缘：
-    level_edges_mm = np.array([0.01, 0.1, 1.0, 2.0, 5.0, 8.0,], dtype=np.float32)
-    # 对应权重：
-    level_weights = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.3], dtype=np.float32)
+# ==========================================
+# Part 2: 统计指标计算函数 (Metrics)
+# ==========================================
+def calc_seq_metrics(true_seq, pred_seq, verbose=True):
+    """
+    计算序列的降水评分指标
+    """
+    T, H, W = true_seq.shape
     
-    # 确保权重归一化 (虽然表里加起来已经是1.0)
-    level_weights = level_weights / level_weights.sum()
+    # 预处理：噪音过滤
+    pred_clean = pred_seq.copy()
+    pred_clean[pred_clean < MetricConfig.THRESHOLD_NOISE] = 0.0
     
-    mm_max = 30.0  # 数据反归一化参数
+    time_weights = MetricConfig.get_time_weights(T)
+    score_k_list = []
+    
+    # 用于日志输出的累积变量
+    ts_mean_levels = np.zeros(len(MetricConfig.LEVEL_EDGES))
+    mae_mm_mean_levels = np.zeros(len(MetricConfig.LEVEL_EDGES))
+    corr_mean_sum = 0.0
 
-    ts_collection = []
-    mae_collection = []
-    corr_collection = []
-    score_k_collection = [] # 存储每个时刻的 Score_k
+    # 截断负值
+    tru_clipped = np.clip(true_seq, 0.0, None)
+    prd_clipped = np.clip(pred_clean, 0.0, None)
 
-    tru_clipped = np.clip(tru, 0.0, None)
-    prd_clipped = np.clip(prd, 0.0, None)
+    print(f"True Stats: Max={np.max(tru_clipped)*MetricConfig.MM_MAX:.2f}, Mean={np.mean(tru_clipped)*MetricConfig.MM_MAX:.2f}")
+    print(f"Pred Stats: Max={np.max(prd_clipped)*MetricConfig.MM_MAX:.2f}, Mean={np.mean(prd_clipped)*MetricConfig.MM_MAX:.2f}")
+
+    if verbose:
+        print("-" * 90)
+        print(f"{'T':<3} | {'Corr(R)':<9} | {'TS_w_sum':<9} | {'Score_k':<9} | {'W_time':<6}")
+        print("-" * 90)
 
     for t in range(T):
+        # 1. 准备数据 (转为mm)
         tru_frame = tru_clipped[t].reshape(-1)
         prd_frame = prd_clipped[t].reshape(-1)
-
-        tru_mm = tru_frame * mm_max
-        prd_mm = prd_frame * mm_max
+        tru_mm = tru_frame * MetricConfig.MM_MAX
+        prd_mm = prd_frame * MetricConfig.MM_MAX
         abs_err = np.abs(prd_mm - tru_mm)
-        
-        # ------------------------------------------------
-        # 计算 R_k (公式 6)
-        # ------------------------------------------------
+
+        # 2. 计算 Corr (R_k)
         tru_mean = tru_frame.mean()
         prd_mean = prd_frame.mean()
         tru_center = tru_frame - tru_mean
         prd_center = prd_frame - prd_mean
-        numerator = float(np.dot(tru_center, prd_center))
-        sum_tru_sq = float(np.sum(tru_center ** 2))
-        sum_prd_sq = float(np.sum(prd_center ** 2))
-        sigma = 1e-6 
-        denom = float(np.sqrt(sum_tru_sq * sum_prd_sq + sigma))
+        
+        numerator = np.dot(tru_center, prd_center)
+        sum_tru_sq = np.sum(tru_center ** 2)
+        sum_prd_sq = np.sum(prd_center ** 2)
+        denom = np.sqrt(sum_tru_sq * sum_prd_sq) + 1e-8
         
         if sum_tru_sq == 0 and sum_prd_sq == 0:
             corr_t = 1.0
+        elif sum_tru_sq == 0 or sum_prd_sq == 0:
+            corr_t = 0.0
         else:
-            corr_t = numerator / denom if denom > 0 else 1e-5 # 若分母极小，相关性视为0
+            corr_t = numerator / denom
         corr_t = float(np.clip(corr_t, -1.0, 1.0))
-        
-        # ------------------------------------------------
-        # 计算 TS_ik 和 MAE_ik (按等级循环)
-        # ------------------------------------------------
-        ts_t = []
-        mae_t = []
-        
-        for idx, threshold in enumerate(level_edges_mm):
-            # TS 计算: 基于阈值判别 (Thresholding)
+        corr_mean_sum += corr_t
+
+        # 3. 逐等级计算 TS 和 MAE
+        ts_levels = []
+        mae_term_levels = [] 
+
+        for i, threshold in enumerate(MetricConfig.LEVEL_EDGES):
             tru_bin = tru_mm >= threshold
             prd_bin = prd_mm >= threshold
             
+            # TS 计算
             tp = np.logical_and(tru_bin, prd_bin).sum()
             fp = np.logical_and(~tru_bin, prd_bin).sum()
             fn = np.logical_and(tru_bin, ~prd_bin).sum()
             denom_ts = tp + fp + fn
-            
-            # 处理分母为0的情况 (无事件)
-            current_ts = float(tp / denom_ts) if denom_ts > 0 else 1.0 # 若完全无事件，TS记为1(完全正确)
-            ts_t.append(current_ts)
+            ts_val = (tp / denom_ts) if denom_ts > 0 else 1.0
+            ts_levels.append(ts_val)
 
-            # MAE 计算 (公式 5)
-            # N_B: 样本中观测值或预报值大于0的格点数。
-            # 在分级计算中，通常指该等级范围内的有效点，或者大于该阈值的点。
-            # 结合TS语境，这里取大于该阈值的点作为有效点计算MAE
+            # MAE 计算 (有效区域)
             mask_valid = (tru_mm >= threshold) | (prd_mm >= threshold)
+            current_mae = abs_err[mask_valid].mean() if mask_valid.sum() > 0 else 0.0
             
-            if np.any(mask_valid):
-                current_mae = float(abs_err[mask_valid].mean())
-            else:
-                current_mae = 0.0 # 无有效点，MAE记为0
-            mae_t.append(current_mae)
+            # MAE Term
+            mae_term = np.sqrt(np.exp(-current_mae / 100.0))
+            mae_term_levels.append(mae_term)
+            
+            # 累加
+            ts_mean_levels[i] += ts_val / T
+            mae_mm_mean_levels[i] += current_mae / T 
 
-        ts_t = np.array(ts_t, dtype=np.float32)
-        mae_t = np.array(mae_t, dtype=np.float32)
+        ts_levels = np.array(ts_levels)
+        mae_term_levels = np.array(mae_term_levels)
 
-        # ------------------------------------------------
-        # 计算 Score_k (公式 3)
-        # Score_k = sqrt(exp(R_k - 1)) * Σ [ W_i * TS_ik * sqrt(exp(-MAE_ik / 100)) ]
-        # ------------------------------------------------
-        
-        # 1. 相关性项
-        term_corr = np.sqrt(np.exp(corr_t - 1.0))
-        
-        # 2. MAE 项: sqrt(exp(-MAE / 100))
-        # 注意：公式中是 MAE_ik / 100，直接使用绝对误差值
-        term_mae = np.sqrt(np.exp(-mae_t / 100.0))
-        
-        # 3. 加权求和
-        # Sum [ W_i * TS_ik * MAE_term ]
-        weighted_sum = np.sum(level_weights * ts_t * term_mae)
-        
-        score_t = float(term_corr * weighted_sum)
+        # 4. 组合 Score_k
+        term_corr = np.sqrt(np.exp(corr_t - 1.0)) # 注意公式修正：通常是 sqrt(exp(R-1))
+        term_weighted = np.sum(MetricConfig.LEVEL_WEIGHTS * ts_levels * mae_term_levels)
+        score_k = term_corr * term_weighted
+        score_k_list.append(score_k)
 
-        ts_collection.append(ts_t)
-        mae_collection.append(mae_t)
-        corr_collection.append(corr_t)
-        score_k_collection.append(score_t)
+        if verbose:
+            ts_show = np.sum(ts_levels * MetricConfig.LEVEL_WEIGHTS)
+            print(f"{t:<3} | {corr_t:<9.4f} | {ts_show:<9.4f} | {score_k:<9.4f} | {time_weights[t]:<6.4f}")
 
-    ts_collection = np.stack(ts_collection, axis=0)
-    mae_collection = np.stack(mae_collection, axis=0)
-    corr_collection = np.array(corr_collection)
-    score_k_collection = np.array(score_k_collection)
+    score_k_arr = np.array(score_k_list)
+    final_score = np.sum(score_k_arr * time_weights)
+    corr_mean = corr_mean_sum / T
 
-    # ---- 3. 计算最终加权总分 ----
-    # Score = Σ (Score_k * Time_Weight_k)
-    # 假设 time_weights 和 score_k_collection 长度一致
-    final_score = float(np.sum(score_k_collection * time_weights))
-
-    # 为了日志展示方便，保留均值计算
-    ts_mean = ts_collection.mean(axis=0)
-    mae_mean = mae_collection.mean(axis=0)
-    corr_mean = float(corr_collection.mean())
-
-    level_labels = [f">={edge}" for edge in level_edges_mm]
-
-    print("[METRIC] TS_mean@" + "/".join(level_labels) + ": "
-          + ", ".join(f"{v:.3f}" for v in ts_mean))
-    print("[METRIC] MAE_mm_mean@" + "/".join(level_labels) + ": "
-          + ", ".join(f"{v:.3f}" for v in mae_mean))
-    print(f"[METRIC] Corr_mean: {corr_mean:.3f}")
-    print(f"[METRIC] Final_Weighted_Score: {final_score:.4f}")
+    print("-" * 90)
+    print(f"[METRIC] TS_mean  (Levels): {', '.join([f'{v:.3f}' for v in ts_mean_levels])}")
+    print(f"[METRIC] MAE_mean (Levels): {', '.join([f'{v:.3f}' for v in mae_mm_mean_levels])}")
+    print(f"[METRIC] Corr_mean: {corr_mean:.4f}")
+    print(f"[METRIC] Final_Weighted_Score: {final_score:.6f}")
+    print(f"[METRIC] Score_per_t: {', '.join([f'{s:.3f}' for s in score_k_arr])}")
+    print("-" * 90)
     
-    # 每个时效得分输出
-    print("[METRIC] Score_per_t: " + ", ".join(f"{v:.3f}" for v in score_k_collection))
+    return {
+        "final_score": final_score,
+        "score_per_frame": score_k_arr,
+        "pred_clean": pred_clean
+    }
 
-    # ---- 绘图部分 (保持不变) ----
-    rows, cols = 4, T
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 2, rows * 2), constrained_layout=True)
+# ==========================================
+# Part 3: 绘图功能函数 (Visualization)
+# ==========================================
+def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1.0):
+    """绘制 Obs, GT, Pred, Diff 对比图"""
+    T = true_seq.shape[0]
+    rows = 4
+    cols = T
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.5, rows * 1.5), constrained_layout=True)
+    if T == 1: axes = axes[:, np.newaxis]
+
     for t in range(T):
-        axes[0, t].imshow(obs[t], cmap='turbo', vmin=0.0, vmax=vmax)
+        # 1. Obs
+        if t < obs_seq.shape[0]:
+            axes[0, t].imshow(obs_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
+        else:
+            axes[0, t].imshow(np.zeros_like(true_seq[0]), cmap='gray')
         axes[0, t].axis('off')
         if t == 0: axes[0, t].set_title('Obs', fontsize=8)
 
-        axes[1, t].imshow(tru[t], cmap='turbo', vmin=0.0, vmax=vmax)
+        # 2. GT
+        axes[1, t].imshow(true_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
         axes[1, t].axis('off')
         if t == 0: axes[1, t].set_title('GT', fontsize=8)
 
-        axes[2, t].imshow(prd[t], cmap='turbo', vmin=0.0, vmax=vmax)
+        # 3. Pred
+        axes[2, t].imshow(pred_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
         axes[2, t].axis('off')
         if t == 0: axes[2, t].set_title('Pred', fontsize=8)
         
-        diff = tru[t] - prd[t]
-        axes[3, t].imshow( diff, cmap='bwr', vmin=-1, vmax=1) # 修改为bwr更能体现差异正负
+        # 4. Diff (GT - Pred)
+        diff = true_seq[t] - pred_seq[t]
+        axes[3, t].imshow(diff, cmap='bwr', vmin=-0.5, vmax=0.5)
         axes[3, t].axis('off')
         if t == 0: axes[3, t].set_title('Diff', fontsize=8)
-            
-    print(f'[INFO] Plot done, Saving to {out_path}')
+
+    print(f'[INFO] Saving Plot to {out_path}')
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, dpi=150)
     plt.close(fig)
+
+# ==========================================
+# Part 4: 主流程
+# ==========================================
+def render(obs_seq, true_seq, pred_seq, out_path: str, vmax: float = 1.0):
+    # 数据格式统一 (转 Numpy & 提取通道)
+    def to_numpy_ch(x, ch=0):
+        if isinstance(x, torch.Tensor): x = x.detach().cpu().numpy()
+        if x.ndim == 4: x = x[:, ch] # (T, C, H, W) -> (T, H, W)
+        return x
+
+    obs = to_numpy_ch(obs_seq)
+    tru = to_numpy_ch(true_seq)
+    prd = to_numpy_ch(pred_seq)
+    
+    print(f"Processing: {os.path.basename(out_path)}")
+    
+    # 计算指标
+    metrics_res = calc_seq_metrics(tru, prd, verbose=True)
+    
+    final_score = metrics_res['final_score']
+    scores_arr = metrics_res['score_per_frame']
+    pred_clean = metrics_res['pred_clean']
+    
+    # 绘图
+    plot_seq_visualization(obs, tru, pred_clean, scores_arr, out_path, vmax=vmax)
     
     return final_score
 
@@ -241,10 +276,10 @@ def main():
     if args.accelerator == 'cuda': device_str = 'cuda'
     device = torch.device(device_str if torch.cuda.is_available() else 'cpu')
     
-    print("="*50)
+    print("="*80)
     print(f"[INFO] Starting GAN Testing")
     print(f" - Save Dir: {args.save_dir}")
-    print("="*50)
+    print("="*80)
 
     # 1. 查找并加载模型
     try:
@@ -255,12 +290,14 @@ def main():
         model = SimVP_GAN.load_from_checkpoint(ckpt_path, map_location=device)
         model.eval().to(device)
         
-        # 获取 resize shape (从 backbone 中继承)
+        # 获取 resize shape
         resize_shape = model.backbone.resize_shape
         print(f"[INFO] Resize Shape from model: {resize_shape}")
         
     except Exception as e:
         print(f"[ERROR] Failed to load model: {e}")
+        import traceback
+        traceback.print_exc()
         return
 
     # 2. 数据加载 (batch_size=1)
@@ -275,7 +312,8 @@ def main():
     test_loader = data_module.test_dataloader()
 
     # 3. 推理循环
-    out_dir = os.path.join(args.save_dir, 'vis_results')
+    vis_folder = f'vis_results_{datetime.now().strftime("%m%d_%H%M")}'
+    out_dir = os.path.join(args.save_dir, vis_folder)
     os.makedirs(out_dir, exist_ok=True)
     
     score_mean_list = []
@@ -283,7 +321,8 @@ def main():
     
     with torch.no_grad():
         for bidx, batch in enumerate(test_loader):
-            metadata_batch, x_raw, y_raw, _ = batch
+            metadata_batch, x_raw, y_raw, _, _ = batch # 注意这里解包可能有5个元素
+            
             x_raw = x_raw.to(device)
             y_raw = y_raw.to(device)
             
@@ -294,9 +333,11 @@ def main():
             # 前向传播 (GAN forward 会自动调用 backbone + refiner)
             y_pred = model(x)
             
-            obs_np = x[0].cpu().float().numpy()
-            tru_np = y[0].cpu().float().numpy()
-            prd_np = y_pred[0].cpu().float().numpy()
+            # 准备数据给 render
+            # x: (1, T, C, H, W)
+            obs_np = x[0].cpu().float()
+            tru_np = y[0].cpu().float()
+            prd_np = y_pred[0].cpu().float()
             
             sample_id = metadata_batch[0].get('sample_id', f'sample_{bidx}')
             out_path = os.path.join(out_dir, f'{sample_id}.png')
@@ -311,6 +352,7 @@ def main():
 
     if len(score_mean_list) > 0:
         print(f"\n[FINAL] Average Score: {np.mean(score_mean_list):.6f}")
+        print(f"[INFO] Visualizations saved to: {out_dir}")
 
 if __name__ == '__main__':
     main()
