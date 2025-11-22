@@ -243,7 +243,7 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1
         diff = true_seq[t] - pred_seq[t]
         axes[3, t].imshow(diff, cmap='bwr', vmin=-0.5, vmax=0.5)
         axes[3, t].axis('off')
-        if t == 0: axes[3, t].set_title(f'Diff\nS:{scores[t]:.2f}', fontsize=8)
+        if t == 0: axes[3, t].set_title(f'Diff', fontsize=8)
 
     print(f'[INFO] Saving Plot to {out_path}')
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
