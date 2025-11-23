@@ -601,76 +601,168 @@ except ImportError:
             raise ImportError("Please install 'mamba_ssm' (pip install mamba-ssm) to use Mamba models.")
 
 
-class MambaSubBlock(nn.Module):
+class TokenSpaceMLP(nn.Module):
     """
-    [Advanced] SimVP Visual Mamba Block with Omni-directional Scanning
+    Token Space MLP for efficient feature mixing in [B, L, C] format.
+    Replaces Conv2d-based MixMlp with Linear-based MLP to eliminate expensive
+    dimension transformations between Mamba and MLP.
+    """
+    def __init__(self, in_features, hidden_features=None, out_features=None, 
+                 act_layer=nn.GELU, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        
+        # Use Linear layers instead of Conv2d for Token space
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.act = act_layer()
+        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.drop = nn.Dropout(drop)
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x):
+        # x: [B, L, C]
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x
+
+
+class AdaptiveFusionGate(nn.Module):
+    """
+    自适应融合门 (Adaptive Fusion Gate) - Token Space Optimized
     
-    升级说明:
-    1. 水平扫描 (H-Scan): 左右 + 右左
-    2. 垂直扫描 (V-Scan): 上下 + 下上
-    3. 融合: 4个方向特征相加，实现真正的全局无死角感受野。
+    优化：
+    直接在 [B, H, W, C] 维度上操作，使用 Linear 层替代 1x1 Conv2d。
+    消除了 permute 到 [B, C, H, W] 的昂贵内存拷贝开销。
     """
+    def __init__(self, dim, reduction=4):
+        super().__init__()
+        gate_dim = max(dim // reduction, 8)
+        
+        # 使用 Linear 替代 1x1 Conv2d，因为在 [B, ..., C] 格式下，Linear 等价于 1x1 Conv
+        self.gate_net = nn.Sequential(
+            nn.Linear(dim, gate_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(gate_dim, dim),
+            nn.Sigmoid()
+        )
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        
+    def forward(self, h_feat, v_feat):
+        """
+        Args:
+            h_feat: [B, H, W, C] 水平特征
+            v_feat: [B, H, W, C] 垂直特征
+        """
+        # 1. 上下文提取：直接在空间维度 (H, W) 上求平均，替代 AdaptiveAvgPool2d
+        # (h + v) / 2 -> [B, H, W, C] -> mean(dim=(1,2)) -> [B, C]
+        combined_context = (h_feat + v_feat) / 2.0
+        context = combined_context.mean(dim=(1, 2)) # Global Average Pooling
+        
+        # 2. 生成门控权重
+        # [B, C] -> MLP -> [B, C] -> [B, 1, 1, C] (为了广播)
+        gate = self.gate_net(context).unsqueeze(1).unsqueeze(1)
+        
+        # 3. 融合: G ⊙ H + (1-G) ⊙ V
+        # 利用广播机制，gate [B, 1, 1, C] 会自动应用到 [B, H, W, C] 的每个空间位置
+        return gate * h_feat + (1 - gate) * v_feat
+
+
+class MambaSubBlock(nn.Module):
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, **kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         
-        # Mamba 核心层 (复用权重以节省参数)
+        # 注意：确保你的 Mamba 实现支持共享权重，或者这里实例化是否需要调整
+        # 通常 mamba_ssm 库的 Mamba 模块如果传入相同的 args 会创建独立的权重
+        # 如果你想真正"复用权重"，可能需要显式处理，但在 Visual Mamba 中通常是独立的两个 Mamba 层
+        # 或者是同一个实例跑两次（这里你的写法是同一个实例跑4次扫描，这是为了节省参数量，合理的）
         self.mamba = Mamba(
             d_model=dim,
-            d_state=16,
+            d_state=32,
             d_conv=4,
             expand=2,
         )
         
+        # 使用优化后的融合门
+        self.fusion_gate = AdaptiveFusionGate(dim=dim, reduction=4)
+        
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm2 = nn.BatchNorm2d(dim)
+        self.norm2 = nn.LayerNorm(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = MixMlp(
+        self.mlp = TokenSpaceMLP(
             in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
     def forward(self, x):
-        # x: [B, C, H, W]
+        # x: [B, C, H, W] (SimVP 通常是 NCHW 输入)
         B, C, H, W = x.shape
+        L = H * W
         
-        # 1. 准备 Token
-        # [B, C, H, W] -> [B, H, W, C]
-        x_hw = x.permute(0, 2, 3, 1)
-        x_norm = self.norm1(x_hw) # LayerNorm on C
+        # 1. 转换到 Token 空间: [B, C, H, W] -> [B, H, W, C]
+        x_hw = x.permute(0, 2, 3, 1).contiguous() 
+        x_token = x_hw.view(B, -1, C) # [B, L, C]
         
-        # --- 扫描 1: 水平方向 (Horizontal) ---
-        # [B, H, W, C] -> [B, H*W, C]
-        x_h = x_norm.reshape(B, -1, C)
+        # 2. Mamba 处理 (Token Space)
+        x_norm = self.norm1(x_token)
         
-        # Forward & Backward (Horizontal)
-        out_h_fwd = self.mamba(x_h)
-        out_h_bwd = self.mamba(x_h.flip([1])).flip([1])
+        # --- 扫描准备 ---
+        # 显式 view 确保形状正确
+        x_hw_norm = x_norm.view(B, H, W, C)
         
-        # --- 扫描 2: 垂直方向 (Vertical) ---
-        # [B, H, W, C] -> [B, W, H, C] (转置) -> [B, W*H, C]
-        x_v = x_norm.transpose(1, 2).reshape(B, -1, C)
-        
-        # Forward & Backward (Vertical)
-        # 复用同一个 Mamba 核心，学习各向同性特征
-        out_v_fwd = self.mamba(x_v)
-        out_v_bwd = self.mamba(x_v.flip([1])).flip([1])
-        
-        # 还原垂直扫描形状: [B, W*H, C] -> [B, W, H, C] -> [B, H, W, C]
-        out_v_combined = (out_v_fwd + out_v_bwd).view(B, W, H, C).transpose(1, 2)
-        
-        # 还原水平扫描形状
+        # --- 水平扫描 (Horizontal) ---
+        # 展平为 [B, L, C]
+        x_h_flat = x_hw_norm.view(B, -1, C) 
+        out_h_fwd = self.mamba(x_h_flat)
+        # flip([1]) 在 token 维度翻转
+        out_h_bwd = self.mamba(x_h_flat.flip([1])).flip([1])
         out_h_combined = (out_h_fwd + out_h_bwd).view(B, H, W, C)
         
-        # --- 全向融合 ---
-        # 将水平和垂直的特征相加
-        mamba_out = out_h_combined + out_v_combined
+        # --- 垂直扫描 (Vertical) ---
+        # 转置为 [B, W, H, C] 然后展平，这样 sequential 读取时就是垂直方向
+        # 注意使用 contiguous() 避免内存碎片导致的 view 错误
+        x_v_flat = x_hw_norm.transpose(1, 2).contiguous().view(B, -1, C)
         
-        # [B, H, W, C] -> [B, C, H, W]
-        x_mamba = mamba_out.permute(0, 3, 1, 2)
+        out_v_fwd = self.mamba(x_v_flat)
+        out_v_bwd = self.mamba(x_v_flat.flip([1])).flip([1])
+        
+        # 还原形状: [B, L, C] -> [B, W, H, C] -> [B, H, W, C]
+        out_v_combined = (out_v_fwd + out_v_bwd).view(B, W, H, C).transpose(1, 2)
+        
+        # --- 自适应融合 ---
+        # 输入和输出都是 [B, H, W, C]，无需 permute
+        mamba_out_hw = self.fusion_gate(out_h_combined, out_v_combined)
+        mamba_out = mamba_out_hw.view(B, L, C)
         
         # Residual 1
-        x = x + self.drop_path(x_mamba)
+        x_token = x_token + self.drop_path(mamba_out)
         
-        # 2. MLP (Image Space)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        # 3. MLP (Token Space)
+        x_token_norm = self.norm2(x_token)
+        mlp_out = self.mlp(x_token_norm)
         
-        return x
+        # Residual 2
+        x_token = x_token + self.drop_path(mlp_out)
+        
+        # 4. 转换回 Image 空间: [B, L, C] -> [B, H, W, C] -> [B, C, H, W]
+        x_out = x_token.view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+        
+        return x_out
