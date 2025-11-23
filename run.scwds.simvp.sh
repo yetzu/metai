@@ -51,7 +51,7 @@ case $MODE in
             --min_lr 1e-6 \
             --warmup_epoch 5 \
             \
-            --model_type tau \
+            --model_type mamba \
             --hid_S 128 \
             --hid_T 512 \
             --N_S 4 \
@@ -67,6 +67,8 @@ case $MODE in
             --l1_weight 5 \
             --bce_weight 8.0 \
             --ssim_weight 0.5 \
+            --evolution_weight 2.0 \
+            --bce_weight 15.0 \
             --temporal_weight_enabled true \
             --temporal_weight_max 5.0 \
             --temporal_consistency_weight 0.0 \

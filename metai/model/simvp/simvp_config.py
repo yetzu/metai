@@ -54,7 +54,7 @@ class SimVPConfig(BaseModel):
     hid_T: int = Field(default=512, description="时序转换器隐藏层通道数")
     N_S: int = Field(default=4, description="空间编码器层数")
     N_T: int = Field(default=8, description="时序转换器层数")
-    model_type: str = Field(default='tau', description="时序模块类型")
+    model_type: str = Field(default='tau', description="时序模块类型: tau, gsta, mamba")
     mlp_ratio: float = Field(default=8.0, description="MLP 扩展比例")
     drop: float = Field(default=0.0, description="Dropout 比率")
     drop_path: float = Field(default=0.05, description="Drop Path 比率 (随机深度)")
@@ -73,7 +73,8 @@ class SimVPConfig(BaseModel):
     temporal_weight_max: float = Field(default=2.0, description="最远时刻的权重倍数")
     use_composite_loss: bool = Field(default=True, description="是否启用组合损失 (Pixel + SSIM)")
     ssim_weight: float = Field(default=0.3, description="MS-SSIM 结构损失权重 (优化 Ra)")
-    temporal_consistency_weight: float = Field(default=0.5, description="时序一致性损失权重")
+    evolution_weight: float = Field(default=2.0, description="物理演变损失权重 (建议 2.0~5.0)")
+    temporal_consistency_weight: float = Field(default=0.0, description="时序一致性损失权重")
     
     # 🏆 裁判评分 W_k (表 1) 权重向量
     referee_weights_w_k: List[float] = Field(

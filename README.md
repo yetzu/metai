@@ -1,3 +1,26 @@
+
+# env
+
+```bash
+conda config --add channels defaults
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
+conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch
+conda config --set show_channel_urls yes
+conda config --show channels
+
+pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+conda create -n metai python=3.11
+conda activate metai
+
+pip install torch torchvision 
+pip install pandas matplotlib scipy opencv-python PyYAML seaborn pydantic cartopy
+pip install lightning lightning-utilities tensorboard timm pytorch-msssim
+conda install -c nvidia cuda-toolkit=12.1
+pip install mamba_ssm
+conda install rasterio
+```
+
 nohup bash run.scwds.convlstm.sh train > train_convlstm_scwds.log 2>&1 &
 nohup bash run.scwds.simvp.sh train > train_simvp_scwds.log 2>&1 &
 

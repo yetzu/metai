@@ -1,7 +1,29 @@
 import torch
 from torch import nn
 
-from .simvp_module import BasicConv2d, ConvSC, GroupConv2d, gInception_ST, AttentionModule, SpatialAttention, GASubBlock, ConvMixerSubBlock, ConvNeXtSubBlock, HorNetSubBlock, MLPMixerSubBlock, MogaSubBlock, PoolFormerSubBlock, SwinSubBlock, UniformerSubBlock, VANSubBlock, ViTSubBlock, TemporalAttention, TemporalAttentionModule, TAUSubBlock
+from .simvp_module import (
+    BasicConv2d, 
+    ConvSC,
+    GroupConv2d, 
+    gInception_ST, 
+    AttentionModule, 
+    SpatialAttention, 
+    GASubBlock, 
+    ConvMixerSubBlock, 
+    ConvNeXtSubBlock, 
+    HorNetSubBlock, 
+    MLPMixerSubBlock, 
+    MogaSubBlock, 
+    PoolFormerSubBlock, 
+    SwinSubBlock, 
+    UniformerSubBlock, 
+    VANSubBlock, 
+    ViTSubBlock, 
+    TemporalAttention, 
+    TemporalAttentionModule, 
+    TAUSubBlock,
+    MambaSubBlock
+)
 
 class SimVP_Model(nn.Module):
     r"""SimVP Model
@@ -224,6 +246,10 @@ class MetaBlock(nn.Module):
         elif model_type == 'tau':
             self.block = TAUSubBlock(
                 in_channels, kernel_size=21, mlp_ratio=mlp_ratio,
+                drop=drop, drop_path=drop_path, act_layer=nn.GELU)
+        elif model_type == 'mamba':
+            self.block = MambaSubBlock(
+                in_channels, mlp_ratio=mlp_ratio, 
                 drop=drop, drop_path=drop_path, act_layer=nn.GELU)
         else:
             assert False and "Invalid model_type in SimVP"

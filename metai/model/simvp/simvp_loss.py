@@ -48,6 +48,43 @@ def temporal_consistency_loss(pred: torch.Tensor) -> torch.Tensor:
     
     return temporal_loss
 
+class EvolutionLoss(nn.Module):
+    """
+    [新增] 物理演变损失 (Physics-Guided Evolution Loss)
+    
+    理论依据: 
+    基于雷达回波的平流方程 (Advection Equation) 近似: dI/dt + v * grad(I) = 0。
+    如果模型的位置预测出现偏差，会导致预测场的时间导数 (dI/dt) 与真实场不一致。
+    通过最小化演变梯度的误差，我们引入了隐式的运动约束，强迫模型修正位置偏差。
+    """
+    def __init__(self, weight=1.0):
+        super().__init__()
+        self.weight = weight
+        self.l1 = nn.L1Loss(reduction='mean')
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pred: [B, T, H, W] (已归一化 0-1)
+            target: [B, T, H, W]
+        """
+        # 维度兼容处理
+        if pred.dim() == 5: pred = pred.squeeze(2)
+        if target.dim() == 5: target = target.squeeze(2)
+            
+        if pred.shape[1] < 2:
+            return torch.tensor(0.0, device=pred.device)
+
+        # 计算一阶时间差分 (Finite Difference)
+        # Pred 变化量
+        pred_diff = pred[:, 1:] - pred[:, :-1]
+        # True 变化量
+        target_diff = target[:, 1:] - target[:, :-1]
+
+        # 惩罚两者的差异
+        loss = self.l1(pred_diff, target_diff)
+        
+        return self.weight * loss
 
 def create_threshold_weights(target: torch.Tensor, 
                              thresholds: List[float],
@@ -86,6 +123,7 @@ class SparsePrecipitationLoss(nn.Module):
                  eps: float = 1e-6,
                  temporal_weight_enabled: bool = False,
                  temporal_weight_max: float = 2.0,
+                 evolution_weight: float = 0.0,
                  ssim_weight: Optional[float] = 0.3,
                  temporal_consistency_weight: float = 0.1, # 修正：降低平滑偏好
                  referee_weights_w_k: Optional[List[float]] = None):
@@ -101,6 +139,11 @@ class SparsePrecipitationLoss(nn.Module):
         self.temporal_weight_enabled = temporal_weight_enabled
         self.temporal_weight_max = temporal_weight_max
         self.ssim_weight = ssim_weight if ssim_weight is not None and ssim_weight > 0 else None
+        self.evolution_weight = evolution_weight
+        if self.evolution_weight > 0:
+            self.evo_loss = EvolutionLoss(weight=self.evolution_weight)
+        else:
+            self.evo_loss = None
         self.temporal_consistency_weight = temporal_consistency_weight
         
         # 🚨 核心修正: Logit Space Loss - BCEWithLogitsLoss 替代 MSELoss (BCE代理)
@@ -219,6 +262,12 @@ class SparsePrecipitationLoss(nn.Module):
              ssim_score = self._compute_ssim_score(pred_clamped_4d, target_4d)
              ssim_loss_val = 1.0 - ssim_score
              total_loss += self.ssim_weight * ssim_loss_val
+
+        # 🆕 应用物理演变损失 (Evolution Loss)
+        if self.evo_loss is not None:
+            # 注意：必须传入 [0,1] 范围的预测值 (pred_clamped_4d)
+            e_loss = self.evo_loss(pred_clamped_4d, target_4d)
+            total_loss += e_loss
         
         # Temporal Consistency Loss
         if self.temporal_consistency_weight > 0:
