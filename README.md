@@ -20,8 +20,13 @@ conda install -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge
 
 conda install -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/ cuda-toolkit=12.1 -y
 
-pip install mamba_ssm
 
+mkdir mamba_build_temp
+cd mamba_build_temp
+tar -xzf /home/dataset-assist-0/code/mamba_ssm-2.2.6.post3.tar.gz
+cd mamba_ssm-2.2.6.post3/
+export FORCE_BUILD=1
+python setup.py install
 
 ```
 

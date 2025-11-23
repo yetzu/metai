@@ -148,6 +148,9 @@ case $MODE in
             --save_dir ./output/simvp_gan \
             --num_samples 10 \
             --accelerator cuda \
+            --backbone_ckpt_path ./output/simvp/last.ckpt \
+            --gan_ckpt_path "./output/simvp_gan/checkpoints/epoch=04-val_score=0.1876.ckpt" \
+            --tta 16 \
             --device cuda
         ;;
 
@@ -161,7 +164,7 @@ case $MODE in
             --in_shape 20 28 256 256 \
             --save_dir ./output/simvp \
             --accelerator cuda \
-            --vis \
+            --vis
         ;;
         
     "infer_gan")
@@ -171,10 +174,10 @@ case $MODE in
         
         python run/gan_infer_scwds_simvp.py \
             --data_path data/samples.testset.jsonl \
-            --in_shape 20 28 256 256 \
-            --save_dir ./output/simvp \
-            --accelerator cuda \
+            --save_dir ./output/simvp_gan \
+            --backbone_ckpt_path ./output/simvp/last.ckpt \
             --vis \
+            --accelerator cuda
         ;;
     *)
         echo "错误: 不支持的操作模式 '$MODE'"

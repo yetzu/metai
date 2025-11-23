@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 导入依赖
 from metai.utils import MetLabel, MLOGI, MLOGE
 from metai.dataset.met_dataloader_scwds import ScwdsDataModule
-from metai.model.simvp import SimVP_GAN
+# 🚨 修正导入路径，直接从文件导入，防止 __init__.py 未更新导致 ImportError
+from metai.model.simvp.simvp_gan import SimVP_GAN 
 from metai.utils.met_config import get_config
 
 # 竞赛常量
@@ -29,17 +30,13 @@ TIME_STEP_MINUTES = 6
 
 def find_best_gan_ckpt(save_dir: str) -> str:
     """查找 GAN 训练的最佳 checkpoint"""
-    # 优先找 best.ckpt
-    # 注意：GAN 训练脚本中 ModelCheckpoint 保存路径通常在 checkpoints 子目录
     ckpt_dir = os.path.join(save_dir, 'checkpoints')
     if not os.path.exists(ckpt_dir):
-        ckpt_dir = save_dir # 兼容旧结构
+        ckpt_dir = save_dir 
         
-    # 优先找 last.ckpt (GAN 训练波动大，last 往往具有最新状态)
     last = os.path.join(ckpt_dir, 'last.ckpt')
     if os.path.exists(last): return last
     
-    # 否则按时间排序找最新的
     cpts = sorted(glob.glob(os.path.join(ckpt_dir, '*.ckpt')), key=os.path.getmtime)
     if len(cpts) == 0:
         raise FileNotFoundError(f'No checkpoint found in {save_dir}')
@@ -84,10 +81,12 @@ def plot_inference(obs_seq, pred_seq, save_path):
 def parse_args():
     parser = argparse.ArgumentParser(description='Infer SCWDS SimVP-GAN Model')
     parser.add_argument('--data_path', type=str, default='data/samples.testset.jsonl') # 默认改为测试集
-    parser.add_argument('--backbone_ckpt_path', type=str, default='./output/simvp/last.ckpt', help='Path to pretrained SimVP backbone')
-    # 注意：GAN 模型的输入尺寸由 Backbone 决定，这里只是为了兼容接口，实际会读取模型配置
     parser.add_argument('--in_shape', type=int, nargs=4, default=[20, 28, 256, 256]) 
     parser.add_argument('--save_dir', type=str, default='./output/simvp_gan', help='GAN output dir')
+    
+    parser.add_argument('--backbone_ckpt_path', type=str, default='./output/simvp/last.ckpt',
+                        help='Path to pretrained SimVP backbone checkpoint. Required for GAN initialization.')
+
     parser.add_argument('--accelerator', type=str, default='cuda')
     parser.add_argument('--vis', action='store_true', help='Enable visualization')
     parser.add_argument('--vis_output', type=str, default='./output/simvp_gan/vis_infer')
@@ -103,16 +102,26 @@ def main():
 
     print("=" * 60)
     print(f"[INFO] GAN Inference Config:")
-    print(f"  Model Dir: {args.save_dir}")
-    print(f"  Device:    {device}")
+    print(f"  GAN Model Dir:   {args.save_dir}")
+    print(f"  Backbone Path:   {args.backbone_ckpt_path}")
+    print(f"  Device:          {device}")
     print("=" * 60)
 
     # 1. 加载模型 (SimVP_GAN)
     try:
+        # 检查 Backbone 是否存在
+        if not os.path.exists(args.backbone_ckpt_path):
+            raise FileNotFoundError(f"Backbone checkpoint not found at: {args.backbone_ckpt_path}")
+
         ckpt_path = find_best_gan_ckpt(args.save_dir)
         MLOGI(f"加载 GAN 检查点: {ckpt_path}")
         
-        model = SimVP_GAN.load_from_checkpoint(ckpt_path, map_location=device)
+        # 🚨 关键修正: 显式传入 backbone_ckpt_path 以完成 __init__
+        model = SimVP_GAN.load_from_checkpoint(
+            ckpt_path, 
+            map_location=device, 
+            backbone_ckpt_path=args.backbone_ckpt_path
+        )
         model.eval().to(device)
         
         # 从模型中获取正确的 resize_shape (256, 256)
@@ -132,8 +141,7 @@ def main():
         batch_size=1,
         num_workers=1
     )
-    # 使用 'infer' stage (或者 test，取决于 dataset 实现)
-    # 这里假设 infer_dataloader 可用
+    # 使用 'infer' stage
     data_module.setup('infer') 
     infer_loader = data_module.infer_dataloader()
     
@@ -143,14 +151,13 @@ def main():
             try:
                 metadata_list, batch_x, input_mask = batch
                 
-                # 数据预处理 (与 GAN training_step 保持一致)
+                # 数据预处理
                 batch_x = batch_x.to(device)
                 # 显式调用 Backbone 的插值函数，确保分辨率对齐
                 x = model.backbone._interpolate_batch_gpu(batch_x, mode='max_pool')
                 
                 # Inference
-                # GAN 的 forward 已经包含了 backbone + refiner + clamp
-                # Output: [1, T, C, H, W] (normalized 0-1)
+                # GAN forward: Backbone -> Sigmoid -> Refiner -> Add -> Clamp
                 batch_y = model(x)
                 batch_y = batch_y.squeeze() # [20, H, W]
                 
@@ -159,7 +166,6 @@ def main():
                 
                 # 解析元数据
                 sample_id_parts = sample_id.split('_')
-                # 兼容不同的 ID 格式
                 if len(sample_id_parts) >= 4:
                     task_id = metadata.get('task_id') or sample_id_parts[0]
                     region_id = metadata.get('region_id') or sample_id_parts[1]
@@ -167,7 +173,6 @@ def main():
                     station_id = metadata.get('station_id') or sample_id_parts[3]
                     case_id = metadata.get('case_id') or '_'.join(sample_id_parts[:4])
                 else:
-                    # Fallback for simple IDs
                     task_id, region_id, time_id, station_id, case_id = "T0", "R0", "Time", "St", sample_id
 
                 timestamps = metadata.get('timestamps')
@@ -178,7 +183,6 @@ def main():
                 last_obs_time_str = timestamps[-1]
                 last_obs_dt = datetime.strptime(last_obs_time_str, FMT)
                 
-                # 统计变量
                 seq_max_val = 0.0
                 seq_mean_val = 0.0
                 pred_frames_vis = []
@@ -186,7 +190,6 @@ def main():
                 # 后处理与保存
                 for idx, y in enumerate(batch_y):
                     # 1. Upsample to target resolution (301x301)
-                    # 这里的 y 是 256x256
                     y_interp = F.interpolate(
                         y.unsqueeze(0).unsqueeze(0), 
                         size=(301, 301),
@@ -233,7 +236,6 @@ def main():
                 
                 # 6. 可视化
                 if args.vis:
-                    # obs shape: [1, T, C, H, W] -> [T, H, W]
                     obs_frames = batch_x[0, :, 0, :, :].cpu().numpy() 
                     pred_frames = np.array(pred_frames_vis)
                     
