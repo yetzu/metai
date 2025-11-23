@@ -44,8 +44,6 @@ def parse_args():
     parser.add_argument('--drop_path', type=float, default=None, help='Drop path rate')
     parser.add_argument('--spatio_kernel_enc', type=int, default=None, help='Spatial kernel enc')
     parser.add_argument('--spatio_kernel_dec', type=int, default=None, help='Spatial kernel dec')
-    parser.add_argument('--evolution_weight', type=float, default=None, help='Physics-guided evolution loss weight')
-    parser.add_argument('--evolution_bias', type=float, default=None, help='Bias for initiation in evolution loss')
     
     # 优化器/调度器参数
     parser.add_argument('--opt', type=str, default=None, help='Optimizer type')
@@ -62,25 +60,12 @@ def parse_args():
     parser.add_argument('--devices', type=str, default=None, help='Devices')
     parser.add_argument('--precision', type=str, default=None, help='Precision')
     
-    # 损失函数参数
-    parser.add_argument('--positive_weight', type=float, default=None, help='Positive weight')
-    parser.add_argument('--sparsity_weight', type=float, default=None, help='Sparsity weight')
-    parser.add_argument('--l1_weight', type=float, default=None, help='L1 weight')
-    parser.add_argument('--loss_threshold', type=float, default=None, help='Loss threshold')
-    parser.add_argument('--use_threshold_weights', action='store_true', help='Use threshold weights')
-    parser.add_argument('--temporal_weight_enabled', type=str, default=None, help='Temporal weight enabled')
-    parser.add_argument('--temporal_weight_max', type=float, default=None, help='Max temporal weight')
-    parser.add_argument('--temporal_consistency_weight', type=float, default=None, help='Temporal consistency weight')
-    parser.add_argument('--ssim_weight', type=float, default=None, help='MS-SSIM weight')
-    parser.add_argument('--use_composite_loss', type=str, default=None, help='Use composite loss (true/false)')
-    
-    # 课程学习参数
-    parser.add_argument('--use_curriculum_learning', type=str, default=None, help='Use curriculum learning')
-    parser.add_argument('--curriculum_warmup_epochs', type=int, default=None, help='Warmup epochs')
-    parser.add_argument('--curriculum_transition_epochs', type=int, default=None, help='Transition epochs')
-    
-    # 新增 BCE 权重参数
-    parser.add_argument('--bce_weight', type=float, default=None, help='BCE loss weight (for TS optimization)') 
+    # 损失函数参数 (HybridLoss，统一使用 loss_weight_ 前缀)
+    parser.add_argument('--loss_weight_l1', type=float, default=None, help='L1 Loss weight')
+    parser.add_argument('--loss_weight_ssim', type=float, default=None, help='MS-SSIM Loss weight')
+    parser.add_argument('--loss_weight_csi', type=float, default=None, help='Soft-CSI Loss weight')
+    parser.add_argument('--loss_weight_spectral', type=float, default=None, help='Spectral Loss weight')
+    parser.add_argument('--loss_weight_evo', type=float, default=None, help='Evolution Loss weight') 
     
     return parser.parse_args()
 
@@ -149,11 +134,7 @@ def main():
     if 'precision' not in config_kwargs:
         config_kwargs['precision'] = detect_precision()
     
-    # 布尔值处理 (String -> Bool)
-    bool_params = ['temporal_weight_enabled', 'use_curriculum_learning', 'use_composite_loss']
-    for param in bool_params:
-        if param in config_kwargs and isinstance(config_kwargs[param], str):
-            config_kwargs[param] = config_kwargs[param].lower() == 'true'
+    # 布尔值处理 (String -> Bool) - 已移除，HybridLoss 不需要这些参数
     
     # 4. 实例化 Config 对象
     try:

@@ -62,33 +62,12 @@ class SimVPConfig(BaseModel):
     spatio_kernel_dec: int = Field(default=3, description="解码器卷积核大小")
     out_channels: int = Field(default=1, description="输出通道数")
 
-    # 5. 损失函数配置 (优化后的权重)
-    use_threshold_weights: bool = Field(default=True, description="是否对不同降水强度使用分级权重")
-    positive_weight: float = Field(default=100.0, description="有雨区域的基础权重倍数")
-    sparsity_weight: float = Field(default=10.0, description="稀疏性惩罚权重")
-    l1_weight: float = Field(default=0.75, description="L1 Loss 权重 (优化 MAE)")
-    bce_weight: float = Field(default=8.0, description="二值分类损失 (BCE 代理) 权重 (优化 TS)")
-    loss_threshold: float = Field(default=0.01, description="判定有雨/无雨的数值阈值")
-    temporal_weight_enabled: bool = Field(default=False, description="是否启用随时间递增的权重")
-    temporal_weight_max: float = Field(default=2.0, description="最远时刻的权重倍数")
-    use_composite_loss: bool = Field(default=True, description="是否启用组合损失 (Pixel + SSIM)")
-    ssim_weight: float = Field(default=0.3, description="MS-SSIM 结构损失权重 (优化 Ra)")
-    evolution_weight: float = Field(default=2.0, description="物理演变损失权重 (建议 2.0~5.0)")
-    temporal_consistency_weight: float = Field(default=0.0, description="时序一致性损失权重")
-    
-    # 🏆 裁判评分 W_k (表 1) 权重向量
-    referee_weights_w_k: List[float] = Field(
-        default=[ 
-            0.0075, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 
-            0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.0075, 0.005 
-        ],
-        description="裁判评分规则中的 W_k 时间步权重"
-    )
-
-    # 6. 课程学习 (Curriculum Learning)
-    use_curriculum_learning: bool = Field(default=True, description="是否启用课程学习")
-    curriculum_warmup_epochs: int = Field(default=5, description="Warmup 阶段 Epoch 数")
-    curriculum_transition_epochs: int = Field(default=10, description="过渡阶段 Epoch 数")
+    # 5. 损失函数配置 (HybridLoss 参数，统一使用 loss_weight_ 前缀)
+    loss_weight_l1: float = Field(default=1.0, description="L1 Loss 权重 (基础像素对齐)")
+    loss_weight_ssim: float = Field(default=0.5, description="MS-SSIM 结构损失权重 (大尺度结构一致性)")
+    loss_weight_csi: float = Field(default=1.0, description="Soft-CSI Loss 权重 (直接优化竞赛指标)")
+    loss_weight_spectral: float = Field(default=0.1, description="Spectral Loss 权重 (抗模糊，恢复高频细节)")
+    loss_weight_evo: float = Field(default=0.5, description="Evolution Loss 权重 (物理演变约束)")
 
     # 7. 早停 (Early Stopping)
     # early_stop_monitor: str = Field(default="val_mae", description="监控指标")

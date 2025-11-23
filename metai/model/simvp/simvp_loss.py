@@ -1,297 +1,243 @@
-from typing import List, Optional, Union, Any
 import torch
-from torch import nn
+import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+import torch.fft
 
+# 尝试导入 torchmetrics，如果不存在则提供回退方案
 try:
     from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
     TORCHMETRICS_AVAILABLE = True
 except ImportError:
     TORCHMETRICS_AVAILABLE = False
-    MultiScaleStructuralSimilarityIndexMeasure = None
-    # 占位符函数 (保持简洁，防止导入失败)
-    def ssim_loss(pred, target): return F.mse_loss(pred, target)
 
 
-def temporal_consistency_loss(pred: torch.Tensor) -> torch.Tensor:
-    """
-    计算时序一致性损失（Temporal Consistency Loss）
-    
-    物理意义：
-    惩罚预测序列中相邻时间步的剧烈变化，减少时序抖动（Temporal Flickering），
-    提高预测的时序平滑度。
-    
-    Args:
-        pred: 预测值，形状为 [B, T, C, H, W] 或 [B, T, H, W]
-    
-    Returns:
-        时序一致性损失值（标量）
-    """
-    # 处理不同的输入维度
-    if len(pred.shape) == 5:
-        # [B, T, C, H, W] -> [B, T, H, W] (取第一个通道或平均)
-        if pred.shape[2] == 1:
-            pred = pred.squeeze(2)  # [B, T, H, W]
-        else:
-            pred = pred.mean(dim=2)  # [B, T, H, W]
-    
-    # 如果时间步数小于2，返回0
-    if pred.shape[1] < 2:
-        return torch.tensor(0.0, device=pred.device)
-    
-    # 计算相邻时间步的差分
-    pred_diff = pred[:, 1:] - pred[:, :-1]  # [B, T-1, H, W]
-    
-    # 计算差分的L2范数（鼓励平滑变化）
-    temporal_loss = torch.mean(pred_diff ** 2)
-    
-    return temporal_loss
 
-class EvolutionLoss(nn.Module):
+import torch
+import torch.nn as nn
+
+class WeightedScoreSoftCSILoss(nn.Module):
     """
-    [新增] 物理演变损失 (Physics-Guided Evolution Loss)
+    [针对 SimVP/Mamba 优化] 评分规则对齐的 Soft-CSI 损失函数
     
-    理论依据: 
-    基于雷达回波的平流方程 (Advection Equation) 近似: dI/dt + v * grad(I) = 0。
-    如果模型的位置预测出现偏差，会导致预测场的时间导数 (dI/dt) 与真实场不一致。
-    通过最小化演变梯度的误差，我们引入了隐式的运动约束，强迫模型修正位置偏差。
+    设计依据：
+    严格遵循 Score_k 评分公式，引入：
+    1. 强度加权 (Intensity Weights): 强降水权重更高 (0.3 vs 0.1)。
+    2. 时效加权 (Temporal Weights): 关键时效权重更高 (60min权重是120min的20倍)。
+    
+    这能引导 Mamba 模型将有限的容量分配给得分贡献最大的时空区域。
     """
-    def __init__(self, weight=1.0):
+    def __init__(self, smooth=1.0):
         super().__init__()
-        self.weight = weight
-        self.l1 = nn.L1Loss(reduction='mean')
+        self.MM_MAX = 30.0  # 数据归一化常数
+        
+        # --- 1. 对齐表2：要素分级及权重 ---
+        # 注意：这里选取区间的左端点作为阈值。
+        # 0.1-0.9 -> 0.1
+        # 1.0-1.9 -> 1.0
+        # 2.0-4.9 -> 2.0
+        # 5.0-7.9 -> 5.0
+        # >=8.0   -> 8.0
+        thresholds_raw = [0.1, 1.0, 2.0, 5.0, 8.0]
+        weights_raw    = [0.1, 0.1, 0.2, 0.2, 0.3] 
+        
+        # 归一化阈值
+        self.register_buffer('thresholds', torch.tensor(thresholds_raw) / self.MM_MAX)
+        # 归一化权重 (确保和为1，或者保持相对比例即可，这里保持原始比例)
+        self.register_buffer('intensity_weights', torch.tensor(weights_raw))
+        
+        # --- 2. 对齐表1：预报时效及权重 ---
+        # 对应序号 1 (6min) 到 20 (120min)
+        time_weights_raw = [
+            0.0075, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1,  # 1-10 (60min最重要)
+            0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.0075, 0.005 # 11-20
+        ]
+        # 转为 [1, T, 1, 1] 以便广播
+        self.register_buffer('time_weights', torch.tensor(time_weights_raw).view(1, -1, 1, 1))
+        
+        self.smooth = smooth
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred, target):
         """
-        Args:
-            pred: [B, T, H, W] (已归一化 0-1)
-            target: [B, T, H, W]
+        pred: [B, T, H, W], 范围 [0, 1]
+        target: [B, T, H, W], 范围 [0, 1]
         """
-        # 维度兼容处理
-        if pred.dim() == 5: pred = pred.squeeze(2)
-        if target.dim() == 5: target = target.squeeze(2)
+        # 确保时间步长度匹配 (防止 pred 长度与权重表不一致)
+        T = pred.shape[1]
+        current_time_weights = self.time_weights[:, :T, :, :]
+        
+        # 归一化时间权重，使其平均值为 1，避免 Loss 数值过小
+        # 这样做是为了让 Loss 的数值量级与不加权时保持在一个水平，方便调参
+        current_time_weights = current_time_weights / current_time_weights.mean()
+
+        total_weighted_loss = 0.0
+        total_weight_sum = 0.0
+
+        # 遍历每个强度阈值
+        for i, t in enumerate(self.thresholds):
+            w = self.intensity_weights[i]
             
-        if pred.shape[1] < 2:
-            return torch.tensor(0.0, device=pred.device)
+            # --- Soft CSI 计算 ---
+            # 1. 软二值化：使用 steep sigmoid (k=50) 模拟阶跃
+            # 预测值 > 阈值 -> 1, 否则 -> 0
+            pred_score = torch.sigmoid((pred - t) * 50)
+            target_score = (target > t).float()
+            
+            # 2. 计算 Intersection (TP) 和 Union (TP + FN + FP)
+            # 在 Spatial (H, W) 维度求和，保留 (B, T) 维度，以便应用时间权重
+            intersection = (pred_score * target_score).sum(dim=(-2, -1))
+            union = pred_score.sum(dim=(-2, -1)) + target_score.sum(dim=(-2, -1)) - intersection
+            
+            # 3. 计算每个时间步、每个样本的 CSI
+            # csi: [B, T]
+            csi = (intersection + self.smooth) / (union + self.smooth)
+            
+            # 4. 计算 Loss = 1 - CSI
+            loss_map = 1.0 - csi
+            
+            # --- 关键改进：应用时间权重 ---
+            # loss_map [B, T] * time_weights [1, T]
+            # 结果是对 Time 加权后的 Loss
+            weighted_loss_t = (loss_map * current_time_weights.squeeze(-1).squeeze(-1)).mean()
+            
+            # --- 关键改进：应用强度权重 ---
+            total_weighted_loss += weighted_loss_t * w
+            total_weight_sum += w
 
-        # 计算一阶时间差分 (Finite Difference)
-        # Pred 变化量
+        # 返回加权平均后的 Loss
+        return total_weighted_loss / total_weight_sum
+
+class LogSpectralDistanceLoss(nn.Module):
+    """
+    频域损失。
+    SimVP+Mamba 容易产生平滑纹理，此损失强制模型在频域保持高频分量，
+    使生成的雷达回波图具有真实的锐度和纹理。
+    """
+    def __init__(self, epsilon=1e-6):
+        super().__init__()
+        self.epsilon = epsilon
+
+    def forward(self, pred, target):
+        # FFT 变换
+        pred_fft = torch.fft.rfft2(pred, dim=(-2, -1), norm='ortho')
+        target_fft = torch.fft.rfft2(target, dim=(-2, -1), norm='ortho')
+        
+        # 幅度谱
+        pred_mag = torch.abs(pred_fft)
+        target_mag = torch.abs(target_fft)
+        
+        # 对数距离 (平衡低频和高频的贡献)
+        loss = F.l1_loss(torch.log(pred_mag + self.epsilon), torch.log(target_mag + self.epsilon))
+        return loss
+
+class WeightedEvolutionLoss(nn.Module):
+    """
+    物理感知的加权演变损失。
+    原理：雷达回波的变化（一阶时间差分）应当符合物理规律。
+    改进：对强回波区域的变化给予更高权重，因为强对流的生消是预报的难点。
+    """
+    def __init__(self, weight_scale=5.0):
+        super().__init__()
+        self.weight_scale = weight_scale
+
+    def forward(self, pred, target):
+        # 计算时间差分 (dI/dt)
         pred_diff = pred[:, 1:] - pred[:, :-1]
-        # True 变化量
         target_diff = target[:, 1:] - target[:, :-1]
-
-        # 惩罚两者的差异
-        loss = self.l1(pred_diff, target_diff)
         
-        return self.weight * loss
+        # 计算误差
+        diff_error = torch.abs(pred_diff - target_diff)
+        
+        # 动态加权：如果该位置是强回波（在 target 中），则赋予更高权重
+        # target[:, 1:] 代表 t+1 时刻的真实强度
+        weight_map = 1.0 + self.weight_scale * target[:, 1:]
+        
+        weighted_loss = (diff_error * weight_map).mean()
+        return weighted_loss
 
-def create_threshold_weights(target: torch.Tensor, 
-                             thresholds: List[float],
-                             weights: Optional[List[float]] = None) -> torch.Tensor:
-    """[优化版] 根据降水阈值创建权重张量，使用 torch.bucketize。"""
-    if weights is None:
-        n_intervals = len(thresholds) + 1
-        weights = [0.5 + i * 0.5 for i in range(n_intervals)]
-    
-    if len(weights) != len(thresholds) + 1:
-        raise ValueError(f"权重数量({len(weights)})应该比阈值数量({len(thresholds)})多1")
-
-    thresholds_tensor = torch.tensor(thresholds, device=target.device, dtype=target.dtype)
-    weights_tensor = torch.tensor(weights, device=target.device, dtype=target.dtype)
-    
-    indices = torch.bucketize(target, thresholds_tensor)
-    weight_map = weights_tensor[indices]
-    
-    return weight_map
-
-
-class SparsePrecipitationLoss(nn.Module):
+class HybridLoss(nn.Module):
     """
-    稀疏降水损失函数 - 专为保持降水预测的稀疏性设计，与 Logit Space 和裁判评分 W_k 对齐。
-    """
+    Mamba 物理感知混合损失函数
     
+    设计理念：
+    1. L1: 基础像素对齐 (Base)。
+    2. MS-SSIM: 利用 Mamba 的全局视野，保证大尺度结构一致性 (Structure)。
+    3. Soft-CSI: 直接优化竞赛指标，解决稀疏性 (Metric)。
+    4. Spectral: 解决模糊，恢复高频细节 (Texture)。
+    5. Evolution: 约束状态空间的演变符合物理规律 (Physics)。
+    """
     def __init__(self, 
-                 positive_weight: float = 100.0,
-                 sparsity_weight: float = 5.0,     # 修正：降低对虚警的惩罚强度
-                 l1_weight: float = 0.5,           # 修正：L1 Hard Start 权重
-                 bce_weight: float = 8.0,
-                 threshold: float = 0.01,
-                 precipitation_thresholds: Optional[List[float]] = None,
-                 precipitation_weights: Optional[List[float]] = None,
-                 reduction: str = 'mean',
-                 eps: float = 1e-6,
-                 temporal_weight_enabled: bool = False,
-                 temporal_weight_max: float = 2.0,
-                 evolution_weight: float = 0.0,
-                 ssim_weight: Optional[float] = 0.3,
-                 temporal_consistency_weight: float = 0.1, # 修正：降低平滑偏好
-                 referee_weights_w_k: Optional[List[float]] = None):
-        super(SparsePrecipitationLoss, self).__init__()
+                 l1_weight=1.0, 
+                 ssim_weight=0.5, 
+                 csi_weight=1.0, 
+                 spectral_weight=0.1, 
+                 evo_weight=0.5):
+        super().__init__()
+        self.weights = {
+            'l1': l1_weight,
+            'ssim': ssim_weight,
+            'csi': csi_weight,
+            'spec': spectral_weight,
+            'evo': evo_weight
+        }
         
-        self.positive_weight = positive_weight
-        self.sparsity_weight = sparsity_weight
-        self.l1_weight = l1_weight
-        self.bce_weight = bce_weight
-        self.threshold = threshold
-        self.reduction = reduction
-        self.eps = eps
-        self.temporal_weight_enabled = temporal_weight_enabled
-        self.temporal_weight_max = temporal_weight_max
-        self.ssim_weight = ssim_weight if ssim_weight is not None and ssim_weight > 0 else None
-        self.evolution_weight = evolution_weight
-        if self.evolution_weight > 0:
-            self.evo_loss = EvolutionLoss(weight=self.evolution_weight)
+        self.l1 = nn.L1Loss()
+        
+        # MS-SSIM (如果可用)
+        if TORCHMETRICS_AVAILABLE and ssim_weight > 0:
+            self.ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(data_range=1.0)
         else:
-            self.evo_loss = None
-        self.temporal_consistency_weight = temporal_consistency_weight
-        
-        # 🚨 核心修正: Logit Space Loss - BCEWithLogitsLoss 替代 MSELoss (BCE代理)
-        self.bce_loss = nn.BCEWithLogitsLoss(reduction='none') 
-        self.l1_loss = nn.L1Loss(reduction='none')
+            self.ms_ssim = None
+            
+        self.soft_csi = WeightedScoreSoftCSILoss()
+        self.spectral = LogSpectralDistanceLoss()
+        self.evolution = WeightedEvolutionLoss()
 
-        # 降水阈值配置
-        if precipitation_thresholds is None:
-            # 竞赛默认阈值 (归一化)
-            self.precipitation_thresholds = [0.1/30.0, 1.0/30.0, 2.0/30.0, 5.0/30.0, 8.0/30.0]
-            self.precipitation_weights = [1.0, 2.0, 5.0, 10.0, 20.0, 30.0] 
-        else:
-             self.precipitation_thresholds = precipitation_thresholds
-             self.precipitation_weights = precipitation_weights
-        
-        # 时序权重 W_k
-        if referee_weights_w_k is not None:
-            self.register_buffer('w_k', torch.tensor(referee_weights_w_k, dtype=torch.float32).view(1, -1, 1, 1))
-        else:
-             self.w_k = None
-        
-        # MS-SSIM 初始化
-        self.use_ssim = False
-        if self.ssim_weight is not None and self.ssim_weight > 0 and TORCHMETRICS_AVAILABLE:
-            self.use_ssim = True
-            # Type assertion: MultiScaleStructuralSimilarityIndexMeasure is guaranteed to be available here
-            assert MultiScaleStructuralSimilarityIndexMeasure is not None, "MultiScaleStructuralSimilarityIndexMeasure should be available when TORCHMETRICS_AVAILABLE is True"
-            self.ms_ssim = MultiScaleStructuralSimilarityIndexMeasure(
-                data_range=1.0, kernel_size=7, betas=(0.0448, 0.2856, 0.3001, 0.2363, 0.1333)[:3], normalize="relu"
-            )
-        else:
-             self.ms_ssim = None
-
-
-    def forward(self, logits_pred: torch.Tensor, target: torch.Tensor, target_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, logits, target, mask=None):
         """
-        计算稀疏降水预测的组合损失。
-        Args:
-            logits_pred: 模型输出的 Logits Z (B, T, C, H, W)
-            target: 真实目标值 (B, T, C, H, W)
-            target_mask: 掩码 (B, T, C, H, W)
+        logits: [B, T, C, H, W] - 模型的原始输出
+        target: [B, T, C, H, W] - 归一化后的真实值 [0, 1]
         """
+        # 1. 预处理
+        if logits.dim() == 5: logits = logits.squeeze(2)
+        if target.dim() == 5: target = target.squeeze(2)
         
-        # 1. 数据维度处理 (将 C 维度压平或移除，针对 C=1 降水通道)
-        if len(logits_pred.shape) == 5:
-            logits_pred_4d = logits_pred.squeeze(2) 
-            target_4d = target.squeeze(2)
-            target_mask_4d = target_mask.squeeze(2) if target_mask is not None else None
-        else:
-             logits_pred_4d = logits_pred
-             target_4d = target
-             target_mask_4d = target_mask
-
-        # 2. 核心预测 (Pred Space, [0, 1])
-        # Pred 用于 L1, SSIM, Sparsity 惩罚
-        pred_4d = torch.sigmoid(logits_pred_4d)
-        pred_clamped_4d = torch.clamp(pred_4d, 0.0, 1.0) 
+        # 映射到 [0, 1]
+        pred = torch.sigmoid(logits)
         
-        # 3. 损失项计算 (基础损失，reduction='none')
+        loss_dict = {}
+        total_loss = 0.0
         
-        # L1 Loss (在 Pred Space, 使用 clamped output)
-        l1_comp = self.l1_loss(pred_clamped_4d, target_4d) 
+        # 2. L1 Loss (基础)
+        l1_loss = self.l1(pred, target)
+        total_loss += self.weights['l1'] * l1_loss
+        loss_dict['l1'] = l1_loss.item()
         
-        # BCE Loss (在 Logit Space, 避免梯度截断)
-        bce_comp = self.bce_loss(logits_pred_4d, target_4d) 
-
-        # 4. 动态权重计算 (Positive + Sparsity)
-        
-        # 降水区域掩码 (Positives)
-        mask_pos = (target_4d > self.threshold)
-        mask_neg = ~mask_pos
-
-        # 虚警区域掩码 (False Positives): 真实为0，预测高于阈值
-        mask_false_pos = torch.logical_and(mask_neg, pred_clamped_4d > self.threshold)
-        
-        # 初始化权重图
-        weight_map = torch.ones_like(target_4d, dtype=target_4d.dtype)
-        
-        # 应用 Positive Weight
-        weight_map[mask_pos] *= self.positive_weight
-        
-        # 应用 Sparsity Weight (惩罚虚警)
-        weight_map[mask_false_pos] += self.sparsity_weight
-        
-        # 5. 组合像素级损失 (加权 L1 + 加权 BCE)
-        
-        # 核心损失项：(L1 * w_l1) + (BCE * w_bce)
-        pixel_loss = l1_comp * self.l1_weight + bce_comp * self.bce_weight
-        
-        # 应用动态权重
-        loss_weighted = pixel_loss * weight_map
-        
-        # 6. 归约和时间步权重
-        
-        # 应用 Target Mask (忽略无效区域)
-        if target_mask_4d is not None:
-             valid_mask = target_mask_4d.bool() 
-             loss_weighted = loss_weighted * valid_mask.float()
-             count = valid_mask.sum() + self.eps 
-        else:
-             count = torch.numel(target_4d) + self.eps 
-        
-        # 应用 W_k 时间权重 (裁判评分权重)
-        if self.w_k is not None:
-             # 确保 w_k 的时间维度与数据匹配 (T)
-             time_weights_expanded = self.w_k.to(loss_weighted.device)
-             loss_weighted = loss_weighted * time_weights_expanded 
-        
-        # 最终归约到单个 Loss 值
-        total_loss = loss_weighted.sum() / count
-
-        # 7. 结构和时序损失 (使用 Pred Space Clamp后的输出)
-        
-        # MS-SSIM Loss
-        if self.use_ssim:
-             ssim_score = self._compute_ssim_score(pred_clamped_4d, target_4d)
-             ssim_loss_val = 1.0 - ssim_score
-             total_loss += self.ssim_weight * ssim_loss_val
-
-        # 🆕 应用物理演变损失 (Evolution Loss)
-        if self.evo_loss is not None:
-            # 注意：必须传入 [0,1] 范围的预测值 (pred_clamped_4d)
-            e_loss = self.evo_loss(pred_clamped_4d, target_4d)
-            total_loss += e_loss
-        
-        # Temporal Consistency Loss
-        if self.temporal_consistency_weight > 0:
-             # 注意: temporal_consistency_loss 内部通常会做 mean/sum 归约，需要谨慎使用乘法权重
-             t_cons = temporal_consistency_loss(pred_clamped_4d.unsqueeze(2)) # 确保输入是 5D
-             total_loss += self.temporal_consistency_weight * t_cons
-        
+        # 3. Soft-CSI Loss (指标优化)
+        if self.weights['csi'] > 0:
+            csi_loss = self.soft_csi(pred, target)
+            total_loss += self.weights['csi'] * csi_loss
+            loss_dict['csi'] = csi_loss.item()
+            
+        # 4. Spectral Loss (抗模糊)
+        if self.weights['spec'] > 0:
+            spec_loss = self.spectral(pred, target)
+            total_loss += self.weights['spec'] * spec_loss
+            loss_dict['spec'] = spec_loss.item()
+            
+        # 5. Evolution Loss (物理约束)
+        if self.weights['evo'] > 0 and pred.shape[1] > 1:
+            evo_loss = self.evolution(pred, target)
+            total_loss += self.weights['evo'] * evo_loss
+            loss_dict['evo'] = evo_loss.item()
+            
+        # 6. MS-SSIM Loss (结构一致性)
+        if self.ms_ssim is not None and self.weights['ssim'] > 0:
+            # SSIM 需要 Channel 维度
+            pred_c = pred.view(-1, 1, pred.shape[-2], pred.shape[-1])
+            target_c = target.view(-1, 1, target.shape[-2], target.shape[-1])
+            ssim_val = self.ms_ssim(pred_c, target_c)
+            ssim_loss = 1.0 - ssim_val
+            total_loss += self.weights['ssim'] * ssim_loss
+            loss_dict['ssim'] = ssim_loss.item()
+            
         return total_loss
-    
-    
-    def _compute_ssim_score(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        """计算 MS-SSIM 分数（1.0 最好）"""
-        H, W = pred.shape[-2:]
-        if min(H, W) < 32: return torch.tensor(1.0, device=pred.device)
-
-        # 增加通道维度 C=1
-        pred_flat = pred.view(-1, 1, H, W)
-        target_flat = target.view(-1, 1, H, W)
-        
-        if self.ms_ssim is None: return torch.tensor(1.0, device=pred.device)
-        
-        try:
-            self.ms_ssim = self.ms_ssim.to(pred.device)
-            ssim_score = self.ms_ssim(pred_flat, target_flat)
-            return ssim_score
-        except Exception:
-            return torch.tensor(1.0, device=pred.device)
