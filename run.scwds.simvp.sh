@@ -63,11 +63,12 @@ case $MODE in
             --spatio_kernel_enc 5 \
             --spatio_kernel_dec 5 \
             \
-            --loss_weight_l1 1.0 \
-            --loss_weight_ssim 0.5 \
-            --loss_weight_csi 1.0 \
-            --loss_weight_spectral 0.1 \
-            --loss_weight_evo 0.5 \
+            --use_curriculum_learning true \
+            # --loss_weight_l1 1.0 \
+            # --loss_weight_ssim 0.5 \
+            # --loss_weight_csi 1.0 \
+            # --loss_weight_spectral 0.1 \
+            # --loss_weight_evo 0.5 \
             \
             --accelerator cuda \
             --devices 0,1,2,3 \

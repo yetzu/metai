@@ -68,6 +68,9 @@ class SimVPConfig(BaseModel):
     loss_weight_csi: float = Field(default=1.0, description="Soft-CSI Loss 权重 (直接优化竞赛指标)")
     loss_weight_spectral: float = Field(default=0.1, description="Spectral Loss 权重 (抗模糊，恢复高频细节)")
     loss_weight_evo: float = Field(default=0.5, description="Evolution Loss 权重 (物理演变约束)")
+    
+    # 6. 课程学习配置
+    use_curriculum_learning: bool = Field(default=True, description="是否启用课程学习（动态调整损失权重）。如果禁用，将使用固定的 loss_weight_* 参数")
 
     # 7. 早停 (Early Stopping)
     # early_stop_monitor: str = Field(default="val_mae", description="监控指标")

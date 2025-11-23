@@ -61,11 +61,14 @@ def parse_args():
     parser.add_argument('--precision', type=str, default=None, help='Precision')
     
     # 损失函数参数 (HybridLoss，统一使用 loss_weight_ 前缀)
-    parser.add_argument('--loss_weight_l1', type=float, default=None, help='L1 Loss weight')
-    parser.add_argument('--loss_weight_ssim', type=float, default=None, help='MS-SSIM Loss weight')
-    parser.add_argument('--loss_weight_csi', type=float, default=None, help='Soft-CSI Loss weight')
-    parser.add_argument('--loss_weight_spectral', type=float, default=None, help='Spectral Loss weight')
-    parser.add_argument('--loss_weight_evo', type=float, default=None, help='Evolution Loss weight') 
+    parser.add_argument('--loss_weight_l1', type=float, default=None, help='L1 Loss weight (仅在禁用课程学习时生效)')
+    parser.add_argument('--loss_weight_ssim', type=float, default=None, help='MS-SSIM Loss weight (仅在禁用课程学习时生效)')
+    parser.add_argument('--loss_weight_csi', type=float, default=None, help='Soft-CSI Loss weight (仅在禁用课程学习时生效)')
+    parser.add_argument('--loss_weight_spectral', type=float, default=None, help='Spectral Loss weight (仅在禁用课程学习时生效)')
+    parser.add_argument('--loss_weight_evo', type=float, default=None, help='Evolution Loss weight (仅在禁用课程学习时生效)')
+    
+    # 课程学习参数
+    parser.add_argument('--use_curriculum_learning', type=lambda x: x.lower() in ['true', '1', 'yes'], default=None, help='是否启用课程学习（默认: True）。如果禁用，将使用固定的 loss_weight_* 参数')
     
     return parser.parse_args()
 

@@ -45,6 +45,9 @@ class SimVP(l.LightningModule):
         rs = config.get('resize_shape', None)
         self.resize_shape = tuple(rs) if rs is not None else None
 
+        # 课程学习配置
+        self.use_curriculum_learning = config.get('use_curriculum_learning', True)
+        
         # 测试相关配置
         self.auto_test_after_epoch = config.get('auto_test_after_epoch', True)
         self.test_script_path = config.get('test_script_path', None)
@@ -64,7 +67,7 @@ class SimVP(l.LightningModule):
         return SimVP_Model(
              in_shape=config.get('in_shape'), hid_S=config.get('hid_S', 128), 
              hid_T=config.get('hid_T', 512), N_S=config.get('N_S', 4), N_T=config.get('N_T', 12),
-             model_type=config.get('model_type', 'tau'), out_channels=config.get('out_channels', 1),
+             model_type=config.get('model_type', 'mamba'), out_channels=config.get('out_channels', 1),
              mlp_ratio=config.get('mlp_ratio', 8.0), drop=config.get('drop', 0.0), drop_path=config.get('drop_path', 0.1),
              spatio_kernel_enc=config.get('spatio_kernel_enc', 3), 
              spatio_kernel_dec=config.get('spatio_kernel_dec', 3)
@@ -95,33 +98,70 @@ class SimVP(l.LightningModule):
             scheduler.step(metric) if metric is not None else scheduler.step()
     
     def on_train_epoch_start(self):
-        """训练 epoch 开始时的回调（HybridLoss 不支持课程学习，此方法保留为空）"""
-        pass
+        """课程学习：动态调整 HybridLoss 的权重（如果启用）"""
+        # 如果禁用课程学习，使用命令行传入的固定权重，不进行动态调整
+        if not self.use_curriculum_learning:
+            return
+        
+        epoch = self.current_epoch
+        
+        # 获取 Loss 模块 (假设 self.criterion 是 HybridLoss)
+        if not hasattr(self, 'criterion') or not isinstance(self.criterion, HybridLoss):
+            return
+
+        # === 阶段定义 ===
+        if epoch < 10: 
+            # Phase 1: 定性 (Warmup)
+            weights = {'l1': 5.0, 'ssim': 1.0, 'evo': 0.1, 'spec': 0.0, 'csi': 0.0}
+            phase_name = "Qualitative (Structure First)"
+        
+        elif epoch < 30:
+            # Phase 2: 定量 (Physics & Sharpness)
+            # 线性过渡示例: evo 从 0.1 -> 2.0
+            progress = (epoch - 10) / 20.0
+            evo_w = 0.1 + progress * (2.0 - 0.1)
+            spec_w = 0.0 + progress * (0.5 - 0.0)
+            csi_w = 0.0 + progress * (1.0 - 0.0)
+            
+            weights = {'l1': 1.0, 'ssim': 0.5, 'evo': evo_w, 'spec': spec_w, 'csi': csi_w}
+            phase_name = f"Quantitative (Transition p={progress:.2f})"
+            
+        else:
+            # Phase 3: 冲刺 (Score Maximization)
+            weights = {'l1': 0.1, 'ssim': 0.2, 'evo': 1.0, 'spec': 1.0, 'csi': 5.0}
+            phase_name = "Sprint (Score Optimization)"
+
+        # 更新权重
+        self.criterion.weights.update(weights)
+        
+        # 记录日志
+        if self.trainer.is_global_zero:
+            print(f"\n[Curriculum] Epoch {epoch} | Phase: {phase_name}")
+            print(f"             Weights: {weights}")
+        
+        # TensorBoard 记录
+        for k, v in weights.items():
+            self.log(f"train/weight_{k}", v, on_epoch=True)
 
     def on_train_epoch_end(self):
         """在每个训练epoch结束后执行测试脚本（后台执行，不阻塞训练）"""
-        # 只在主进程执行（避免多GPU时重复执行）
         if self.trainer.is_global_zero and self.auto_test_after_epoch:
             try:
-                # 检查脚本路径是否有效
                 if not self.test_script_path:
-                    print("[WARNING] Test script path not configured, skipping auto test")
                     return
                 
-                # 获取脚本的绝对路径
-                if os.path.isabs(self.test_script_path):
-                    script_path = str(self.test_script_path)
-                else:
-                    # 尝试从项目根目录查找
+                script_path = str(self.test_script_path)
+                if not os.path.isabs(script_path):
+                    # 尝试定位到项目根目录
                     current_file = os.path.abspath(__file__)
                     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
-                    script_path = os.path.join(project_root, str(self.test_script_path))
+                    script_path = os.path.join(project_root, script_path)
                 
                 if not os.path.exists(script_path):
-                    print(f"[WARNING] Test script not found: {script_path}, skipping auto test")
+                    print(f"[WARNING] Test script not found: {script_path}")
                     return
                 
-                # 创建日志文件路径（保存测试输出）
+                # 日志目录
                 script_dir = os.path.dirname(script_path) or os.getcwd()
                 log_dir = os.path.join(script_dir, 'test_logs')
                 os.makedirs(log_dir, exist_ok=True)
@@ -129,38 +169,25 @@ class SimVP(l.LightningModule):
                 epoch = self.current_epoch
                 log_file = os.path.join(log_dir, f'test_epoch_{epoch:03d}.log')
                 
-                print(f"\n[INFO] Epoch {epoch} completed. Running test script in background: {script_path}")
-                print(f"[INFO] Test output will be saved to: {log_file}")
+                print(f"\n[INFO] Epoch {epoch} done. Launching background test: {script_path}")
                 
-                # 后台执行测试脚本，输出重定向到日志文件
-                # 打开文件用于写入（覆盖模式，每个epoch只调用一次）
-                # 子进程会继承文件描述符，即使父进程关闭文件，子进程仍可继续写入
+                # 后台执行
                 log_fd = open(log_file, 'w')
                 try:
-                    process = subprocess.Popen(
-                        ['bash', script_path, 'test'],
+                    subprocess.Popen(
+                        ['bash', script_path, 'test'], # 传递 'test' 参数给脚本
                         stdout=log_fd,
-                        stderr=subprocess.STDOUT,  # 将stderr也合并到stdout
+                        stderr=subprocess.STDOUT,
                         cwd=script_dir,
-                        start_new_session=True  # 创建新的进程组，确保完全独立（Unix系统会自动调用setsid）
+                        start_new_session=True 
                     )
-                    # 子进程已继承文件描述符，可以安全关闭父进程的文件句柄
-                    # 在Linux/Unix系统中，子进程可以继续写入，直到子进程结束
-                    log_fd.close()
-                    log_fd = None  # 标记已关闭，避免在except中重复关闭
-                    
-                    # 不等待进程完成，立即返回（后台执行）
-                    print(f"[INFO] Test process started (PID: {process.pid})")
+                    log_fd.close() 
                 except Exception as proc_error:
-                    # 如果启动失败，确保关闭文件
-                    if log_fd:
-                        log_fd.close()
+                    if log_fd: log_fd.close()
                     raise proc_error
                 
             except Exception as e:
-                print(f"[ERROR] Failed to execute test script: {e}")
-                import traceback
-                traceback.print_exc()
+                print(f"[ERROR] Failed to launch test script: {e}")
     
     def forward(self, x):
         return self.model(x)
@@ -275,7 +302,7 @@ class SimVP(l.LightningModule):
         
         with torch.no_grad():
             # 损失函数传入 Logits Z
-            loss = self.criterion(logits_pred, y, target_mask=target_mask)
+            loss = self.criterion(logits_pred, y, mask=target_mask)
             
         try:
             self.log('test_loss', loss, on_epoch=True)
