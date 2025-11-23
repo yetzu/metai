@@ -371,7 +371,7 @@ def main():
         epoch = 0
     
     # 创建输出目录
-    out_dir = os.path.join(config.save_dir, f'vis_{epoch}')
+    out_dir = os.path.join(config.save_dir, f'vis_{epoch:02d}')
     os.makedirs(out_dir, exist_ok=True)
     
     # 初始化日志系统，将打印信息保存到文件

@@ -3,6 +3,8 @@
 import subprocess
 import os
 import sys
+import time
+import glob
 from typing import Any, cast, Dict, Optional, Union, List
 import torch
 import torch.nn as nn
@@ -161,15 +163,51 @@ class SimVP(l.LightningModule):
                     print(f"[WARNING] Test script not found: {script_path}")
                     return
                 
+                epoch = self.current_epoch
+                
+                # 获取 checkpoint 保存目录
+                save_dir = None
+                if hasattr(self, 'hparams'):
+                    # hparams 可能是 dict 或 Namespace
+                    if isinstance(self.hparams, dict):
+                        save_dir = self.hparams.get('save_dir', None)
+                    else:
+                        save_dir = getattr(self.hparams, 'save_dir', None)
+                
+                if save_dir is None:
+                    save_dir = getattr(self.trainer, 'default_root_dir', None)
+                
+                # 等待 checkpoint 文件出现
+                if save_dir:
+                    max_wait_time = 300  # 最多等待 5 分钟
+                    check_interval = 2  # 每 2 秒检查一次
+                    waited_time = 0
+                    ckpt_pattern = os.path.join(save_dir, '*.ckpt')
+                    
+                    print(f"\n[INFO] Epoch {epoch} done. Waiting for checkpoint in {save_dir}...")
+                    
+                    while waited_time < max_wait_time:
+                        ckpt_files = glob.glob(ckpt_pattern)
+                        if len(ckpt_files) > 0:
+                            # 找到最新的 checkpoint
+                            latest_ckpt = max(ckpt_files, key=os.path.getmtime)
+                            print(f"[INFO] Checkpoint found: {latest_ckpt}")
+                            break
+                        time.sleep(check_interval)
+                        waited_time += check_interval
+                        if waited_time % 10 == 0:  # 每 10 秒打印一次等待信息
+                            print(f"[INFO] Still waiting for checkpoint... ({waited_time}s/{max_wait_time}s)")
+                    else:
+                        print(f"[WARNING] Timeout waiting for checkpoint after {max_wait_time}s. Proceeding anyway...")
+                
                 # 日志目录
                 script_dir = os.path.dirname(script_path) or os.getcwd()
                 log_dir = os.path.join(script_dir, 'test_logs')
                 os.makedirs(log_dir, exist_ok=True)
                 
-                epoch = self.current_epoch
                 log_file = os.path.join(log_dir, f'test_epoch_{epoch:03d}.log')
                 
-                print(f"\n[INFO] Epoch {epoch} done. Launching background test: {script_path}")
+                print(f"[INFO] Launching background test: {script_path}")
                 
                 # 后台执行
                 log_fd = open(log_file, 'w')
