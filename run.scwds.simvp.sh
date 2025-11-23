@@ -149,8 +149,8 @@ case $MODE in
             --num_samples 10 \
             --accelerator cuda \
             --backbone_ckpt_path ./output/simvp/last.ckpt \
-            --gan_ckpt_path "./output/simvp_gan/checkpoints/epoch=04-val_score=0.1876.ckpt" \
-            --tta 8 \
+            --gan_ckpt_path "./output/simvp_gan/checkpoints/last.ckpt" \
+            --tta 1 \
             --device cuda
         ;;
 
@@ -176,7 +176,7 @@ case $MODE in
             --data_path data/samples.testset.jsonl \
             --save_dir ./output/simvp_gan \
             --backbone_ckpt_path ./output/simvp/last.ckpt \
-            --gan_ckpt_path "./output/simvp_gan/checkpoints/epoch=04-val_score=0.1876.ckpt" \
+            --gan_ckpt_path "./output/simvp_gan/checkpoints/last.ckpt" \
             --tta 8 \
             --vis \
             --accelerator cuda
