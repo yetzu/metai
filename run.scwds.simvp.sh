@@ -53,7 +53,7 @@ case $MODE in
             \
             --model_type mamba \
             --hid_S 128 \
-            --hid_T 512 \
+            --hid_T 256 \
             --N_S 4 \
             --N_T 12 \
             --mlp_ratio 4.0 \

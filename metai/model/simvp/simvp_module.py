@@ -585,23 +585,6 @@ class TAUSubBlock(GASubBlock):
         
         self.attn = TemporalAttention(dim, kernel_size)
 
-这是一份经过严格逻辑梳理和理论验证的完整代码改进方案。
-
-本方案主要包含两大核心升级，旨在解决 SimVP 在强对流降水预测中的痛点：
-
-双向 Mamba 模块 (MambaSubBlock)：替代传统的注意力机制。Mamba 具有线性复杂度且具备全局感受野，但原生 Mamba 存在“单向因果偏见”；我们通过**双向扫描（Bidirectional Scanning）**策略，使其能同时捕捉气象云团在各个方向上的演变特征。
-
-物理演变损失 (EvolutionLoss)：针对纯深度学习模型“位置容易跑偏”的问题，引入基于流体力学平流方程的约束，强迫模型预测的时序变化量与真实物理规律一致。
-
-以下是各文件的完整修改代码：
-
-1. 核心模块：双向 Mamba 实现
-文件路径: metai/model/simvp/simvp_module.py
-
-修改说明：在文件末尾添加 MambaSubBlock 类。该类实现了正向+反向两次扫描，消除了空间位置偏见。
-
-Python
-
 # [追加到 metai/model/simvp/simvp_module.py 末尾]
 
 # --------------------------------------------------------------------------

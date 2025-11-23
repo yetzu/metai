@@ -44,6 +44,8 @@ def parse_args():
     parser.add_argument('--drop_path', type=float, default=None, help='Drop path rate')
     parser.add_argument('--spatio_kernel_enc', type=int, default=None, help='Spatial kernel enc')
     parser.add_argument('--spatio_kernel_dec', type=int, default=None, help='Spatial kernel dec')
+    parser.add_argument('--evolution_weight', type=float, default=None, help='Physics-guided evolution loss weight')
+    parser.add_argument('--evolution_bias', type=float, default=None, help='Bias for initiation in evolution loss')
     
     # 优化器/调度器参数
     parser.add_argument('--opt', type=str, default=None, help='Optimizer type')
