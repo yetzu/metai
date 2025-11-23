@@ -113,7 +113,7 @@ class SimVP(l.LightningModule):
         if epoch < 10: 
             # Phase 1: 定性 (Warmup)
             weights = {'l1': 5.0, 'ssim': 1.0, 'evo': 0.1, 'spec': 0.0, 'csi': 0.0}
-            phase_name = "Qualitative (Structure First)"
+            phase_name = "Phase 1: Qualitative (Structure)"
         
         elif epoch < 30:
             # Phase 2: 定量 (Physics & Sharpness)
@@ -124,12 +124,12 @@ class SimVP(l.LightningModule):
             csi_w = 0.0 + progress * (1.0 - 0.0)
             
             weights = {'l1': 1.0, 'ssim': 0.5, 'evo': evo_w, 'spec': spec_w, 'csi': csi_w}
-            phase_name = f"Quantitative (Transition p={progress:.2f})"
+            phase_name = f"Phase 2: Quantitative (Physics & Sharpness) [p={progress:.2f}]"
             
         else:
             # Phase 3: 冲刺 (Score Maximization)
             weights = {'l1': 0.1, 'ssim': 0.2, 'evo': 1.0, 'spec': 1.0, 'csi': 5.0}
-            phase_name = "Sprint (Score Optimization)"
+            phase_name = "Phase 3: Sprint (Score Maximization)"
 
         # 更新权重
         self.criterion.weights.update(weights)
