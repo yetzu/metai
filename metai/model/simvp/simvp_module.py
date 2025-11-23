@@ -585,11 +585,11 @@ class TAUSubBlock(GASubBlock):
         
         self.attn = TemporalAttention(dim, kernel_size)
 
-# [追加到 metai/model/simvp/simvp_module.py 末尾]
+# ============================================================
+# [Corrected] metai/model/simvp/simvp_module.py (End of file)
+# ============================================================
 
-# --------------------------------------------------------------------------
-# Mamba Integration (Requires: pip install mamba-ssm)
-# --------------------------------------------------------------------------
+# 尝试导入 Mamba
 try:
     from mamba_ssm import Mamba
     MAMBA_AVAILABLE = True
@@ -598,66 +598,63 @@ except ImportError:
     class Mamba(nn.Module):
         def __init__(self, *args, **kwargs):
             super().__init__()
-            raise ImportError("Please install 'mamba_ssm' to use Mamba models.")
+            raise ImportError("Please install 'mamba_ssm' (pip install mamba-ssm) to use Mamba models.")
 
 class MambaSubBlock(nn.Module):
     """
-    [Advanced] SimVP Visual Mamba Block with Bidirectional Scanning
+    SimVP Visual Mamba Block (Bidirectional) - 修复版
     
-    理论依据:
-    原生 SSM (State Space Models) 是因果的(Causal)，只能提取左上方的上下文。
-    气象系统的演变是各向同性的(Isotropic)。通过引入双向扫描(Forward + Backward)，
-    我们赋予了 Mamba 全局非因果感受野，使其能够捕捉任意方向的云团移动。
+    修复说明:
+    1. Mamba 分支在 Token 空间 ([B, L, C]) 运行。
+    2. MLP 分支在 Image 空间 ([B, C, H, W]) 运行，以兼容 MixMlp 的 Conv2d 操作。
+    3. Norm 层分别适配: Norm1 用 LayerNorm (序列), Norm2 用 BatchNorm (图像)。
     """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, **kwargs):
         super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
         
-        # Mamba 核心层: 线性复杂度 O(N) 建模长程依赖
+        # 1. Mamba 分支配置
+        self.norm1 = nn.LayerNorm(dim) # Mamba 标准搭配 LayerNorm
         self.mamba = Mamba(
             d_model=dim,
-            d_state=16,  # SSM 状态维度 (Latent State)
-            d_conv=4,    # 局部卷积宽度
-            expand=2,    # 内部维度扩展因子
+            d_state=16,
+            d_conv=4,
+            expand=2,
         )
         
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         
-        # Channel Mixer: 负责特征通道间的交互
-        self.norm2 = nn.LayerNorm(dim)
+        # 2. MLP 分支配置 (回归 SimVP 标准)
+        self.norm2 = nn.BatchNorm2d(dim) # CNN 标准搭配 BatchNorm
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = MixMlp(
             in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
     def forward(self, x):
-        # x: [B, C, H, W]
+        # Input x: [B, C, H, W]
         B, C, H, W = x.shape
         
-        # 1. Flatten & Transpose: [B, C, H, W] -> [B, L, C]
-        # Mamba 需要序列输入 (B, L, D)
-        x_tokens = x.flatten(2).transpose(1, 2)
-        
-        # 2. Bidirectional Mamba Scan (核心逻辑)
+        # ===========================
+        # Branch 1: Bidirectional Mamba
+        # ===========================
+        # 1. Image -> Tokens: [B, C, H, W] -> [B, H*W, C]
+        x_tokens = x.permute(0, 2, 3, 1).reshape(B, -1, C)
         x_norm = self.norm1(x_tokens)
         
-        # (A) 正向扫描: 捕捉过去/左上的依赖
+        # 2. Scan (Forward + Backward)
         out_fwd = self.mamba(x_norm)
-        
-        # (B) 反向扫描: 捕捉未来/右下的依赖
-        # flip([1]) 将序列倒序，通过共享权重的 Mamba，再倒序回来
         out_bwd = self.mamba(x_norm.flip([1])).flip([1])
+        x_mamba = out_fwd + out_bwd
         
-        # (C) 特征融合: 简单的相加即可融合双向上下文
-        mamba_out = out_fwd + out_bwd
+        # 3. Tokens -> Image: [B, H*W, C] -> [B, C, H, W]
+        x_mamba = x_mamba.view(B, H, W, C).permute(0, 3, 1, 2)
         
-        # Residual Connection 1
-        x_tokens = x_tokens + self.drop_path(mamba_out)
+        # Residual Add 1
+        x = x + self.drop_path(x_mamba)
         
-        # 3. MLP (Channel Mixing)
-        # Residual Connection 2
-        x_tokens = x_tokens + self.drop_path(self.mlp(self.norm2(x_tokens)))
-        
-        # 4. Reshape Back: [B, L, C] -> [B, C, H, W]
-        x = x_tokens.transpose(1, 2).reshape(B, C, H, W)
+        # ===========================
+        # Branch 2: MLP (Conv-based)
+        # ===========================
+        # 直接在 Image 空间操作，兼容 MixMlp
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
         
         return x

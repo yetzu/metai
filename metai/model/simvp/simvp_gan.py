@@ -171,10 +171,10 @@ class SimVP_GAN(l.LightningModule):
             print(f"\n[Curriculum] Epoch {epoch} (Progress {progress:.2f}): "
                   f"Content={self.curr_content:.1f}, Adv={self.curr_adv:.3f}, FM={self.curr_fm:.1f}")
             
-        # 记录到 TensorBoard
-        self.log("train/weight_content", self.curr_content, on_epoch=True)
-        self.log("train/weight_adv", self.curr_adv, on_epoch=True)
-        self.log("train/weight_fm", self.curr_fm, on_epoch=True)
+        # 记录到 TensorBoard (使用 sync_dist=True 确保分布式训练中的同步)
+        self.log("train/weight_content", self.curr_content, on_epoch=True, sync_dist=True)
+        self.log("train/weight_adv", self.curr_adv, on_epoch=True, sync_dist=True)
+        self.log("train/weight_fm", self.curr_fm, on_epoch=True, sync_dist=True)
 
     def forward(self, x):
         # 推理逻辑

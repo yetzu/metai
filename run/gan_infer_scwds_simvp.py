@@ -84,6 +84,7 @@ def plot_inference(obs_seq, pred_seq, save_path):
 def parse_args():
     parser = argparse.ArgumentParser(description='Infer SCWDS SimVP-GAN Model')
     parser.add_argument('--data_path', type=str, default='data/samples.testset.jsonl') # 默认改为测试集
+    parser.add_argument('--backbone_ckpt_path', type=str, default='./output/simvp/last.ckpt', help='Path to pretrained SimVP backbone')
     # 注意：GAN 模型的输入尺寸由 Backbone 决定，这里只是为了兼容接口，实际会读取模型配置
     parser.add_argument('--in_shape', type=int, nargs=4, default=[20, 28, 256, 256]) 
     parser.add_argument('--save_dir', type=str, default='./output/simvp_gan', help='GAN output dir')

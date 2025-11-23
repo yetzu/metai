@@ -21,6 +21,7 @@ if [ $# -eq 0 ]; then
     echo " train_gan  - 基于 SimVP 训练 Refiner GAN (需先完成 train)"
     echo " test_gan   - 测试 GAN 模型"
     echo " infer      - 使用 SimVP 基座进行推理"
+    echo " infer_gan  - 使用 GAN 模型进行推理"
     exit 1
 fi
 
@@ -133,7 +134,8 @@ case $MODE in
             --lambda_adv 0.01 \
             --lambda_fm 10.0 \
             --accelerator cuda \
-            --devices 0,1,2,3
+            --devices 0,1,2,3 \
+            --resume_ckpt ./output/simvp_gan/checkpoints/last.ckpt
         ;;
 
     "test_gan")
@@ -161,9 +163,22 @@ case $MODE in
             --accelerator cuda \
             --vis \
         ;;
+        
+    "infer_gan")
+        echo "----------------------------------------"
+        echo "🎨 开始推理 GAN 模型..."
+        echo "----------------------------------------"
+        
+        python run/gan_infer_scwds_simvp.py \
+            --data_path data/samples.testset.jsonl \
+            --in_shape 20 28 256 256 \
+            --save_dir ./output/simvp \
+            --accelerator cuda \
+            --vis \
+        ;;
     *)
         echo "错误: 不支持的操作模式 '$MODE'"
-        echo "支持的模式: train, test, train_gan, test_gan, infer"
+        echo "支持的模式: train, test, train_gan, test_gan, infer, infer_gan"
         exit 1
         ;;
 esac

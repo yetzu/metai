@@ -17,6 +17,7 @@ def main():
     # 数据参数
     parser.add_argument('--data_path', type=str, default='data/samples.jsonl')
     parser.add_argument('--ckpt_path', type=str, required=True, help='Path to pre-trained SimVP checkpoint')
+    parser.add_argument('--resume_ckpt', type=str, default=None, help='Path to GAN checkpoint to resume from (optional)')
     parser.add_argument('--batch_size', type=int, default=4) # ST-cGAN 显存占用较高，建议默认减小Batch
     parser.add_argument('--num_workers', type=int, default=8)
     
@@ -77,9 +78,16 @@ def main():
         log_every_n_steps=10
     )
     
-    print(f"🚀 Starting ST-cGAN Fine-tuning with Backbone: {args.ckpt_path}")
-    print(f"   Config: Content={args.lambda_content}, Adv={args.lambda_adv}, FM={args.lambda_fm}")
-    trainer.fit(model, data_module)
+    # 5. 训练或恢复
+    if args.resume_ckpt and os.path.exists(args.resume_ckpt):
+        print(f"🔄 Resuming ST-cGAN training from checkpoint: {args.resume_ckpt}")
+        print(f"   Backbone: {args.ckpt_path}")
+        print(f"   Config: Content={args.lambda_content}, Adv={args.lambda_adv}, FM={args.lambda_fm}")
+        trainer.fit(model, data_module, ckpt_path=args.resume_ckpt)
+    else:
+        print(f"🚀 Starting ST-cGAN Fine-tuning with Backbone: {args.ckpt_path}")
+        print(f"   Config: Content={args.lambda_content}, Adv={args.lambda_adv}, FM={args.lambda_fm}")
+        trainer.fit(model, data_module)
 
 if __name__ == '__main__':
     main()
