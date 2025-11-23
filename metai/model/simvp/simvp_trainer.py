@@ -236,9 +236,19 @@ class SimVP(l.LightningModule):
         
         # 损失函数现在传入 Logits Z
         # HybridLoss 内部会处理 Sigmoid 和各项损失计算
-        loss = self.criterion(logits_pred, y, mask=target_mask)
+        loss, loss_dict = self.criterion(logits_pred, y, mask=target_mask)
         
+        # 记录总损失
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
+        
+        # 记录各个损失组件（原始值和加权值）
+        loss_components = ['l1', 'ssim', 'csi', 'spec', 'evo']
+        for comp in loss_components:
+            if comp in loss_dict:
+                self.log(f'train_loss_{comp}', loss_dict[comp], on_step=True, on_epoch=True, prog_bar=False)
+            if f'{comp}_weighted' in loss_dict:
+                self.log(f'train_loss_{comp}_weighted', loss_dict[f'{comp}_weighted'], on_step=True, on_epoch=True, prog_bar=False)
+        
         return loss
     
     def validation_step(self, batch, batch_idx):
@@ -256,7 +266,15 @@ class SimVP(l.LightningModule):
         y_pred_clamped = torch.clamp(y_pred, 0.0, 1.0)
         
         # 损失函数传入 Logits Z
-        loss = self.criterion(logits_pred, y, mask=target_mask)
+        loss, loss_dict = self.criterion(logits_pred, y, mask=target_mask)
+        
+        # 记录验证阶段的各个损失组件
+        loss_components = ['l1', 'ssim', 'csi', 'spec', 'evo']
+        for comp in loss_components:
+            if comp in loss_dict:
+                self.log(f'val_loss_{comp}', loss_dict[comp], on_epoch=True, sync_dist=True)
+            if f'{comp}_weighted' in loss_dict:
+                self.log(f'val_loss_{comp}_weighted', loss_dict[f'{comp}_weighted'], on_epoch=True, sync_dist=True)
         
         # 指标计算使用 clamped Pred
         mae = F.l1_loss(y_pred_clamped, y)
@@ -302,7 +320,15 @@ class SimVP(l.LightningModule):
         
         with torch.no_grad():
             # 损失函数传入 Logits Z
-            loss = self.criterion(logits_pred, y, mask=target_mask)
+            loss, loss_dict = self.criterion(logits_pred, y, mask=target_mask)
+            
+            # 记录测试阶段的各个损失组件
+            loss_components = ['l1', 'ssim', 'csi', 'spec', 'evo']
+            for comp in loss_components:
+                if comp in loss_dict:
+                    self.log(f'test_loss_{comp}', loss_dict[comp], on_epoch=True)
+                if f'{comp}_weighted' in loss_dict:
+                    self.log(f'test_loss_{comp}_weighted', loss_dict[f'{comp}_weighted'], on_epoch=True)
             
         try:
             self.log('test_loss', loss, on_epoch=True)

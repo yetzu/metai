@@ -255,5 +255,11 @@ class HybridLoss(nn.Module):
             ssim_loss = 1.0 - ssim_val
             total_loss += self.weights['ssim'] * ssim_loss
             loss_dict['ssim'] = ssim_loss.item()
+        
+        # 添加加权后的损失值到字典中
+        loss_dict['total'] = total_loss.item() if isinstance(total_loss, torch.Tensor) else total_loss
+        for key in ['l1', 'csi', 'spec', 'evo', 'ssim']:
+            if key in loss_dict and self.weights[key] > 0:
+                loss_dict[f'{key}_weighted'] = self.weights[key] * loss_dict[key]
             
-        return total_loss
+        return total_loss, loss_dict

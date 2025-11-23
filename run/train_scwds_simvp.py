@@ -178,19 +178,39 @@ def main():
             mode=config.early_stop_mode, 
             verbose=True
         ),
+        # 最优模型检查点（保存最佳模型，文件名：best.ckpt）
+        ModelCheckpoint(
+            dirpath=config.save_dir, 
+            filename="best",
+            monitor=config.early_stop_monitor,
+            save_top_k=1,  # 只保存最优的1个模型
+            mode=config.early_stop_mode,
+            save_last=False,
+            auto_insert_metric_name=False  # 文件名不包含指标名
+        ),
+        # Top-3 模型检查点（用于对比分析，文件名包含epoch和score）
         ModelCheckpoint(
             dirpath=config.save_dir, 
             filename="{epoch:02d}-{val_score:.4f}",
             monitor=config.early_stop_monitor,
-            save_top_k=3, 
+            save_top_k=3,  # 保存最好的3个模型
             mode=config.early_stop_mode,
-            save_last=True
+            save_last=False 
         ),
+        # 最后一个检查点（用于恢复训练）
+        ModelCheckpoint(
+            dirpath=config.save_dir, 
+            filename="last",
+            save_top_k=1,
+            save_last=True,
+            auto_insert_metric_name=False
+        ),
+        # 定期保存检查点（每5个epoch）
         ModelCheckpoint(
             dirpath=config.save_dir, 
             filename="periodic-{epoch:02d}",
             every_n_epochs=5, 
-            save_top_k=-1
+            save_top_k=-1  # 保存所有定期检查点
         ), 
         LearningRateMonitor(logging_interval="step")
     ]
