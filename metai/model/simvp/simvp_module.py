@@ -600,20 +600,21 @@ except ImportError:
             super().__init__()
             raise ImportError("Please install 'mamba_ssm' (pip install mamba-ssm) to use Mamba models.")
 
+
 class MambaSubBlock(nn.Module):
     """
-    SimVP Visual Mamba Block (Bidirectional) - 修复版
+    [Advanced] SimVP Visual Mamba Block with Omni-directional Scanning
     
-    修复说明:
-    1. Mamba 分支在 Token 空间 ([B, L, C]) 运行。
-    2. MLP 分支在 Image 空间 ([B, C, H, W]) 运行，以兼容 MixMlp 的 Conv2d 操作。
-    3. Norm 层分别适配: Norm1 用 LayerNorm (序列), Norm2 用 BatchNorm (图像)。
+    升级说明:
+    1. 水平扫描 (H-Scan): 左右 + 右左
+    2. 垂直扫描 (V-Scan): 上下 + 下上
+    3. 融合: 4个方向特征相加，实现真正的全局无死角感受野。
     """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, **kwargs):
         super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
         
-        # 1. Mamba 分支配置
-        self.norm1 = nn.LayerNorm(dim) # Mamba 标准搭配 LayerNorm
+        # Mamba 核心层 (复用权重以节省参数)
         self.mamba = Mamba(
             d_model=dim,
             d_state=16,
@@ -622,39 +623,54 @@ class MambaSubBlock(nn.Module):
         )
         
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        
-        # 2. MLP 分支配置 (回归 SimVP 标准)
-        self.norm2 = nn.BatchNorm2d(dim) # CNN 标准搭配 BatchNorm
+        self.norm2 = nn.BatchNorm2d(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = MixMlp(
             in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
     def forward(self, x):
-        # Input x: [B, C, H, W]
+        # x: [B, C, H, W]
         B, C, H, W = x.shape
         
-        # ===========================
-        # Branch 1: Bidirectional Mamba
-        # ===========================
-        # 1. Image -> Tokens: [B, C, H, W] -> [B, H*W, C]
-        x_tokens = x.permute(0, 2, 3, 1).reshape(B, -1, C)
-        x_norm = self.norm1(x_tokens)
+        # 1. 准备 Token
+        # [B, C, H, W] -> [B, H, W, C]
+        x_hw = x.permute(0, 2, 3, 1)
+        x_norm = self.norm1(x_hw) # LayerNorm on C
         
-        # 2. Scan (Forward + Backward)
-        out_fwd = self.mamba(x_norm)
-        out_bwd = self.mamba(x_norm.flip([1])).flip([1])
-        x_mamba = out_fwd + out_bwd
+        # --- 扫描 1: 水平方向 (Horizontal) ---
+        # [B, H, W, C] -> [B, H*W, C]
+        x_h = x_norm.reshape(B, -1, C)
         
-        # 3. Tokens -> Image: [B, H*W, C] -> [B, C, H, W]
-        x_mamba = x_mamba.view(B, H, W, C).permute(0, 3, 1, 2)
+        # Forward & Backward (Horizontal)
+        out_h_fwd = self.mamba(x_h)
+        out_h_bwd = self.mamba(x_h.flip([1])).flip([1])
         
-        # Residual Add 1
+        # --- 扫描 2: 垂直方向 (Vertical) ---
+        # [B, H, W, C] -> [B, W, H, C] (转置) -> [B, W*H, C]
+        x_v = x_norm.transpose(1, 2).reshape(B, -1, C)
+        
+        # Forward & Backward (Vertical)
+        # 复用同一个 Mamba 核心，学习各向同性特征
+        out_v_fwd = self.mamba(x_v)
+        out_v_bwd = self.mamba(x_v.flip([1])).flip([1])
+        
+        # 还原垂直扫描形状: [B, W*H, C] -> [B, W, H, C] -> [B, H, W, C]
+        out_v_combined = (out_v_fwd + out_v_bwd).view(B, W, H, C).transpose(1, 2)
+        
+        # 还原水平扫描形状
+        out_h_combined = (out_h_fwd + out_h_bwd).view(B, H, W, C)
+        
+        # --- 全向融合 ---
+        # 将水平和垂直的特征相加
+        mamba_out = out_h_combined + out_v_combined
+        
+        # [B, H, W, C] -> [B, C, H, W]
+        x_mamba = mamba_out.permute(0, 3, 1, 2)
+        
+        # Residual 1
         x = x + self.drop_path(x_mamba)
         
-        # ===========================
-        # Branch 2: MLP (Conv-based)
-        # ===========================
-        # 直接在 Image 空间操作，兼容 MixMlp
+        # 2. MLP (Image Space)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         
         return x
