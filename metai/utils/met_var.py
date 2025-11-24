@@ -117,6 +117,12 @@ class MetGis(MetBaseEnum):
     MONTH = ("month", 0, 12)
     HOUR = ("hour", 0, 24)
 
+    # 值域设为 -1 到 1，归一化时会映射到 [0, 1]
+    MONTH_SIN = ("month_sin", -1, 1)
+    MONTH_COS = ("month_cos", -1, 1)
+    HOUR_SIN = ("hour_sin", -1, 1)
+    HOUR_COS = ("hour_cos", -1, 1)
+
 
 class MetVar:
     """

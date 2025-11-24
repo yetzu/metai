@@ -12,11 +12,9 @@ import torch.nn.functional as F
 import lightning as l
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 
-# 导入实际依赖 (假设这些类和函数都存在于项目中)
 from metai.model.core import get_optim_scheduler, timm_schedulers
 from .simvp_model import SimVP_Model
 from .simvp_loss import HybridLoss
-
 
 class SimVP(l.LightningModule):
     def __init__(self, **args):
@@ -25,17 +23,16 @@ class SimVP(l.LightningModule):
         self.save_hyperparameters()
         config: Dict[str, Any] = dict(args)
         
-        # 1. 模型初始化 (SimVP_Model)
+        # 1. 模型初始化
         self.model = self._build_model(config)
         
-        # 2. Loss Configuration Setup (HybridLoss 参数，统一使用 loss_weight_ 前缀)
+        # 2. Loss 配置 (初始化值会被 Curriculum 覆盖，但仍需定义)
         loss_weight_l1 = config.get('loss_weight_l1', 1.0)
         loss_weight_ssim = config.get('loss_weight_ssim', 0.5)
         loss_weight_csi = config.get('loss_weight_csi', 1.0)
         loss_weight_spectral = config.get('loss_weight_spectral', 0.1)
         loss_weight_evo = config.get('loss_weight_evo', 0.5)
 
-        # 3. 初始化 Loss 函数
         self.criterion = HybridLoss(
             l1_weight=loss_weight_l1,
             ssim_weight=loss_weight_ssim,
@@ -53,19 +50,15 @@ class SimVP(l.LightningModule):
         # 测试相关配置
         self.auto_test_after_epoch = config.get('auto_test_after_epoch', True)
         self.test_script_path = config.get('test_script_path', None)
-        # 如果没有指定脚本路径，尝试自动查找
         if self.test_script_path is None:
-            # 尝试从项目根目录查找脚本
             current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
             script_path = os.path.join(current_dir, 'run.scwds.simvp.sh')
             if os.path.exists(script_path):
                 self.test_script_path = script_path
             else:
-                # 如果找不到，使用相对路径
                 self.test_script_path = 'run.scwds.simvp.sh'
     
     def _build_model(self, config: Dict[str, Any]):
-        """实例化 SimVP 模型，使用配置中的优化参数"""
         return SimVP_Model(
              in_shape=config.get('in_shape'), hid_S=config.get('hid_S', 128), 
              hid_T=config.get('hid_T', 512), N_S=config.get('N_S', 4), N_T=config.get('N_T', 12),
@@ -76,11 +69,11 @@ class SimVP(l.LightningModule):
         )
     
     def configure_optimizers(self) -> OptimizerLRScheduler:
-        """配置优化器和学习率调度器，使用 metai.model.core"""
-        
+        """
+        配置优化器。注意：Config 中的 min_lr 应设置为 1e-5，
+        以确保在 Curriculum 的 Phase 3 (高 CSI 权重) 阶段，模型仍有足够的更新步长。
+        """
         max_epochs = getattr(self.hparams, 'max_epochs', 100)
-        
-        # 假设 get_optim_scheduler 存在且可用
         optimizer, scheduler, by_epoch = get_optim_scheduler(self.hparams, max_epochs, self.model)
         
         return cast(OptimizerLRScheduler, {
@@ -92,65 +85,104 @@ class SimVP(l.LightningModule):
         })
     
     def lr_scheduler_step(self, scheduler: Any, metric: Any):
-        """处理 timm 调度器的步进"""
-        # 假设 timm_schedulers 存在且可用
         if any(isinstance(scheduler, sch) for sch in timm_schedulers):
             scheduler.step(epoch=self.current_epoch)
         else:
             scheduler.step(metric) if metric is not None else scheduler.step()
     
     def on_train_epoch_start(self):
-        """课程学习：动态调整 HybridLoss 的权重（如果启用）"""
-        # 如果禁用课程学习，使用命令行传入的固定权重，不进行动态调整
+        """
+        🚀 [SOTA] 课程学习机制 (Curriculum Learning)
+        
+        阶段设计逻辑:
+        1. Phase 1 (0-20%): Structure Warmup. 
+           利用 L1 的强凸性快速下降，禁止 Evo/Spec/CSI 干扰，确保大尺度结构正确。
+        
+        2. Phase 2 (20-50%): Texture & Physics Recovery.
+           L1 权重线性衰减 (10.0 -> 1.0)，对抗模糊。
+           引入 Evo (物理一致性) 和 Spec (频域去模糊) 准备细节。
+        
+        3. Phase 3 (50-100%): Metric Sprint.
+           L1 降维 (0.1)，防止其平滑高回波。
+           CSI 权重指数级拉升 (0.5 -> 10.0)，利用 Soft-CSI 的梯度微调像素跨越 0.1/1.0/5.0 阈值。
+           
+        注意: 必须配合 min_lr >= 1e-5 使用，否则 Phase 3 梯度无法更新。
+        """
         if not self.use_curriculum_learning:
             return
         
         epoch = self.current_epoch
+        max_epochs = getattr(self.hparams, 'max_epochs', 100)
         
-        # 获取 Loss 模块 (假设 self.criterion 是 HybridLoss)
-        if not hasattr(self, 'criterion') or not isinstance(self.criterion, HybridLoss):
-            return
+        # 动态定义阶段边界
+        phase_1_end = int(0.2 * max_epochs)
+        phase_2_end = int(0.5 * max_epochs)
+        
+        weights = {}
+        phase_name = ""
 
-        # === 阶段定义 ===
-        if epoch < 10: 
-            # Phase 1: 定性 (Warmup)
-            weights = {'l1': 5.0, 'ssim': 1.0, 'evo': 0.1, 'spec': 0.0, 'csi': 0.0}
-            phase_name = "Phase 1: Qualitative (Structure)"
-        
-        elif epoch < 30:
-            # Phase 2: 定量 (Physics & Sharpness)
-            # 线性过渡示例: evo 从 0.1 -> 2.0
-            progress = (epoch - 10) / 20.0
-            evo_w = 0.1 + progress * (2.0 - 0.1)
-            spec_w = 0.0 + progress * (0.5 - 0.0)
-            csi_w = 0.0 + progress * (1.0 - 0.0)
+        if epoch < phase_1_end:
+            # === Phase 1: 结构热身 ===
+            # 高 L1，中 SSIM，其他关闭
+            weights = {'l1': 10.0, 'ssim': 1.0, 'evo': 0.0, 'spec': 0.0, 'csi': 0.0}
+            phase_name = "Phase 1: Structure (Convex)"
             
-            weights = {'l1': 1.0, 'ssim': 0.5, 'evo': evo_w, 'spec': spec_w, 'csi': csi_w}
-            phase_name = f"Phase 2: Quantitative (Physics & Sharpness) [p={progress:.2f}]"
+        elif epoch < phase_2_end:
+            # === Phase 2: 物理与纹理重构 ===
+            # 过渡: L1 下降, Evo/Spec 上升
+            progress = (epoch - phase_1_end) / (phase_2_end - phase_1_end)
+            
+            # L1: 10.0 -> 1.0
+            l1_w = 10.0 - progress * (10.0 - 1.0)
+            # SSIM: 1.0 -> 1.0 (保持)
+            ssim_w = 1.0
+            # Evo: 0.0 -> 2.0
+            evo_w = progress * 2.0
+            # Spec: 0.0 -> 0.5 (开始去模糊)
+            spec_w = progress * 0.5
+            # CSI: 0.0 -> 0.5 (预热)
+            csi_w = progress * 0.5
+            
+            weights = {'l1': l1_w, 'ssim': ssim_w, 'evo': evo_w, 'spec': spec_w, 'csi': csi_w}
+            phase_name = f"Phase 2: Texture & Physics [p={progress:.2f}]"
             
         else:
-            # Phase 3: 冲刺 (Score Maximization)
-            weights = {'l1': 0.1, 'ssim': 0.2, 'evo': 1.0, 'spec': 1.0, 'csi': 5.0}
-            phase_name = "Phase 3: Sprint (Score Maximization)"
+            # === Phase 3: 指标极速冲刺 ===
+            # L1 几乎移除，CSI 暴力拉升
+            progress = (epoch - phase_2_end) / (max_epochs - phase_2_end)
+            
+            # L1: 1.0 -> 0.1 (仅做正则，允许高回波预测)
+            l1_w = 1.0 - progress * (1.0 - 0.1)
+            # SSIM: 1.0 -> 0.5 (适度降低)
+            ssim_w = 1.0 - progress * 0.5
+            # Evo: 2.0 (保持物理约束)
+            evo_w = 2.0
+            # Spec: 0.5 -> 1.0 (加强锐度)
+            spec_w = 0.5 + progress * 0.5
+            
+            # CSI: 0.5 -> 10.0 (指数增长)
+            # 这里的梯度会很大，所以需要 min_lr 足够大来承接
+            csi_w = 0.5 + (10.0 - 0.5) * (progress ** 2)
+            
+            weights = {'l1': l1_w, 'ssim': ssim_w, 'evo': evo_w, 'spec': spec_w, 'csi': csi_w}
+            phase_name = f"Phase 3: Metric Sprint [p={progress:.2f}]"
 
         # 更新权重
-        self.criterion.weights.update(weights)
+        if hasattr(self, 'criterion') and hasattr(self.criterion, 'weights'):
+            self.criterion.weights.update(weights)
         
         # 记录日志
         if self.trainer.is_global_zero:
-            print(f"\n[Curriculum] Epoch {epoch} | Phase: {phase_name}")
-            print(f"             Weights: {weights}")
+            w_str = ", ".join([f"{k}={v:.2f}" for k, v in weights.items()])
+            print(f"\n[Curriculum] Epoch {epoch}/{max_epochs} | {phase_name}")
+            print(f"             Weights: {w_str}")
         
-        # TensorBoard 记录
+        # TensorBoard
         for k, v in weights.items():
-            self.log(f"train/weight_{k}", v, on_epoch=True)
+            self.log(f"train/weight_{k}", v, on_epoch=True, sync_dist=True)
 
     def on_train_epoch_end(self):
-        """
-        🚀 [优化] 后台非阻塞式测试
-        原理：生成一个包含等待逻辑的 Python 代码字符串，在独立子进程中运行。
-        主进程不会在此处等待，从而不会影响 GPU 的训练效率。
-        """
+        """后台非阻塞式测试"""
         if self.trainer.is_global_zero and self.auto_test_after_epoch:
             try:
                 if not self.test_script_path: return
@@ -160,11 +192,8 @@ class SimVP(l.LightningModule):
                     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
                     script_path = os.path.join(project_root, script_path)
                 
-                if not os.path.exists(script_path):
-                    print(f"[WARNING] Test script not found: {script_path}")
-                    return
+                if not os.path.exists(script_path): return
                 
-                # 确定保存目录
                 save_dir = None
                 if hasattr(self, 'hparams'):
                     save_dir = self.hparams.get('save_dir') if isinstance(self.hparams, dict) else getattr(self.hparams, 'save_dir', None)
@@ -177,44 +206,27 @@ class SimVP(l.LightningModule):
                 epoch = self.current_epoch
                 log_file = os.path.join(log_dir, f'test_epoch_{epoch:03d}.log')
                 
-                print(f"[INFO] Epoch {epoch} done. Spawning background test job -> {log_file}")
-                
-                # --- 构造后台执行的 Python 代码 ---
-                # 这段代码会在子进程中运行：先等待ckpt生成，再运行测试脚本
+                # 构造后台执行代码
                 background_code = f"""
-import os
-import time
-import glob
-import subprocess
-import sys
-
+import os, time, glob, subprocess, sys
 save_dir = r'{save_dir}'
 script_path = r'{script_path}'
 epoch = {epoch}
-max_wait = 600 # 等待超时时间 (秒)
+max_wait = 600
 
-# 1. 等待 Checkpoint 生成
 start_time = time.time()
 found = False
 while time.time() - start_time < max_wait:
-    # 查找当前 epoch 的 ckpt
     files = glob.glob(os.path.join(save_dir, "*.ckpt"))
-    # 简单逻辑：如果有新文件生成 (通常是 epoch=XX-val_score=XX.ckpt)
-    # 只要目录下有文件，且最新的文件看起来是新的，就可以尝试
-    # 更精确：匹配文件名
     target = [f for f in files if f"epoch={{epoch:02d}}" in f]
-    
     if target:
-        # 确保文件写入完成 (简单 check: 大小不再变化)
         size1 = os.path.getsize(target[0])
         time.sleep(2)
         if os.path.getsize(target[0]) == size1 and size1 > 0:
             found = True
             break
-    
     time.sleep(5)
 
-# 2. 执行测试
 with open(r'{log_file}', 'w') as f:
     if found:
         f.write(f"[Background] Found checkpoint for Epoch {{epoch}}. Starting Test...\\n")
@@ -224,14 +236,9 @@ with open(r'{log_file}', 'w') as f:
         except Exception as e:
             f.write(f"\\n[Background Error] {{e}}\\n")
     else:
-        f.write(f"[Background] Timeout waiting for checkpoint in {{save_dir}}. Test Skipped.\\n")
+        f.write(f"[Background] Timeout waiting for checkpoint. Test Skipped.\\n")
 """
-                # 启动非阻塞子进程
-                subprocess.Popen(
-                    [sys.executable, '-c', background_code],
-                    cwd=script_dir,
-                    start_new_session=True # 关键：脱离当前进程组，防止被 kill
-                )
+                subprocess.Popen([sys.executable, '-c', background_code], cwd=script_dir, start_new_session=True)
                 
             except Exception as e:
                 print(f"[ERROR] Failed to launch test script: {e}")
@@ -240,16 +247,13 @@ with open(r'{log_file}', 'w') as f:
         return self.model(x)
     
     def _interpolate_batch_gpu(self, batch_tensor: torch.Tensor, mode: str = 'max_pool') -> torch.Tensor:
-        """高效的 GPU 批量插值/降采样函数"""
         if self.resize_shape is None: return batch_tensor
         T, C, H, W = batch_tensor.shape[1:]
         target_H, target_W = self.resize_shape
         if H == target_H and W == target_W: return batch_tensor
         
-        # 检查是否为布尔类型，如果是则先转换为浮点数
         is_bool = batch_tensor.dtype == torch.bool
-        if is_bool:
-            batch_tensor = batch_tensor.float()
+        if is_bool: batch_tensor = batch_tensor.float()
         
         B = batch_tensor.shape[0]
         batch_tensor = batch_tensor.view(B * T, C, H, W)
@@ -263,11 +267,7 @@ with open(r'{log_file}', 'w') as f:
             raise ValueError(f"Unsupported interpolation mode: {mode}")
 
         processed_tensor = processed_tensor.view(B, T, C, target_H, target_W)
-        
-        # 如果原始是布尔类型，转换回布尔类型
-        if is_bool:
-            processed_tensor = processed_tensor.bool()
-        
+        if is_bool: processed_tensor = processed_tensor.bool()
         return processed_tensor
     
     def training_step(self, batch, batch_idx):
@@ -278,19 +278,11 @@ with open(r'{log_file}', 'w') as f:
         y = self._interpolate_batch_gpu(y, mode='max_pool')
         target_mask = self._interpolate_batch_gpu(target_mask, mode='nearest')
 
-        # 🚨 [关键修正 1]: 模型输出 Logits Z
         logits_pred = self(x)
-        
-        # 损失函数现在传入 Logits Z
-        # HybridLoss 内部会处理 Sigmoid 和各项损失计算
         loss, loss_dict = self.criterion(logits_pred, y, mask=target_mask)
         
-        # 记录总损失
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-        
-        # 记录各个损失组件（原始值和加权值）
-        loss_components = ['l1', 'ssim', 'csi', 'spec', 'evo']
-        for comp in loss_components:
+        for comp in ['l1', 'ssim', 'csi', 'spec', 'evo']:
             if comp in loss_dict:
                 self.log(f'train_loss_{comp}', loss_dict[comp], on_step=True, on_epoch=True, prog_bar=False)
             if f'{comp}_weighted' in loss_dict:
@@ -307,45 +299,31 @@ with open(r'{log_file}', 'w') as f:
         target_mask = self._interpolate_batch_gpu(target_mask, mode='nearest')
         
         logits_pred = self(x)
-        
-        # 计算 Pred (用于 MAE/MSE 指标记录)
         y_pred = torch.sigmoid(logits_pred)
         y_pred_clamped = torch.clamp(y_pred, 0.0, 1.0)
         
-        # 损失函数传入 Logits Z
         loss, loss_dict = self.criterion(logits_pred, y, mask=target_mask)
         
-        # 记录验证阶段的各个损失组件
-        loss_components = ['l1', 'ssim', 'csi', 'spec', 'evo']
-        for comp in loss_components:
+        for comp in ['l1', 'ssim', 'csi', 'spec', 'evo']:
             if comp in loss_dict:
                 self.log(f'val_loss_{comp}', loss_dict[comp], on_epoch=True, sync_dist=True)
-            if f'{comp}_weighted' in loss_dict:
-                self.log(f'val_loss_{comp}_weighted', loss_dict[f'{comp}_weighted'], on_epoch=True, sync_dist=True)
         
-        # 指标计算使用 clamped Pred
         mae = F.l1_loss(y_pred_clamped, y)
 
-        # === 新增：计算简化的加权 TS Score ===
-        # 反归一化 (假设 max=30.0, 根据您的 test 代码)
         MM_MAX = 30.0
         pred_mm = y_pred_clamped * MM_MAX
         target_mm = y * MM_MAX
-        
-        # 选取关键阈值 (如竞赛规则)
         thresholds = [0.01, 0.1, 1.0, 2.0, 5.0, 8.0] 
-        weights = [0.1, 0.1, 0.1, 0.2, 0.2, 0.3] # 给予强降水更高权重
+        weights = [0.1, 0.1, 0.1, 0.2, 0.2, 0.3]
         ts_sum = 0.0
         
         for t, w in zip(thresholds, weights):
-            # 计算 TS
             hits = ((pred_mm >= t) & (target_mm >= t)).float().sum()
             misses = ((pred_mm < t) & (target_mm >= t)).float().sum()
             false_alarms = ((pred_mm >= t) & (target_mm < t)).float().sum()
             ts = hits / (hits + misses + false_alarms + 1e-6)
             ts_sum += ts * w
             
-        # 记录加权 TS 作为验证指标 (越大越好)
         val_score = ts_sum / sum(weights)
 
         self.log('val_loss', loss, on_epoch=True, prog_bar=True, sync_dist=True)
@@ -355,47 +333,31 @@ with open(r'{log_file}', 'w') as f:
     def test_step(self, batch, batch_idx):
         metadata, x, y, target_mask, input_mask = batch
         target_mask = target_mask.bool()
-
         x = self._interpolate_batch_gpu(x, mode='max_pool')
         y = self._interpolate_batch_gpu(y, mode='max_pool')
         target_mask = self._interpolate_batch_gpu(target_mask, mode='nearest')
 
-        # 🚨 [关键修正 3]: 模型输出 Logits Z
         logits_pred = self(x)
         y_pred = torch.sigmoid(logits_pred)
         y_pred_clamped = torch.clamp(y_pred, 0.0, 1.0)
         
         with torch.no_grad():
-            # 损失函数传入 Logits Z
             loss, loss_dict = self.criterion(logits_pred, y, mask=target_mask)
-            
-            # 记录测试阶段的各个损失组件
-            loss_components = ['l1', 'ssim', 'csi', 'spec', 'evo']
-            for comp in loss_components:
+            for comp in ['l1', 'ssim', 'csi', 'spec', 'evo']:
                 if comp in loss_dict:
                     self.log(f'test_loss_{comp}', loss_dict[comp], on_epoch=True)
-                if f'{comp}_weighted' in loss_dict:
-                    self.log(f'test_loss_{comp}_weighted', loss_dict[f'{comp}_weighted'], on_epoch=True)
             
-        try:
-            self.log('test_loss', loss, on_epoch=True)
-        except RuntimeError:
-            pass
+        self.log('test_loss', loss, on_epoch=True)
         
-        result = {
-            # 输出仍使用 [0, 1] 范围的预测值
+        return {
             'inputs': x[0].cpu().float().numpy(),
             'preds': y_pred_clamped[0].cpu().float().numpy(),
             'trues': y[0].cpu().float().numpy()
         }
-        
-        return result
     
     def infer_step(self, batch, batch_idx):
         metadata, x, input_mask = batch 
-        
         x = self._interpolate_batch_gpu(x, mode='max_pool')
-        # 🚨 [关键修正 4]: 推理时输出 Pred
         logits_pred = self(x)
         y_pred = torch.sigmoid(logits_pred)
         return torch.clamp(y_pred, 0.0, 1.0)

@@ -1,4 +1,5 @@
 import os
+import math
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import List, Optional, Dict, Union, Tuple
@@ -12,7 +13,7 @@ from metai.utils import MetConfig, MetLabel, MetRadar, MetNwp, MetGis, MetVar
 _DEFAULT_CHANNELS: List[Union[MetLabel, MetRadar, MetNwp, MetGis]] = [
     MetLabel.RA, MetRadar.CR, MetRadar.CAP20, MetRadar.CAP30, MetRadar.CAP40, MetRadar.CAP50, MetRadar.CAP60, MetRadar.CAP70, MetRadar.ET, MetRadar.HBR, MetRadar.VIL,
     MetNwp.WS925, MetNwp.WS700, MetNwp.WS500, MetNwp.Q1000, MetNwp.Q850, MetNwp.Q700, MetNwp.PWAT, MetNwp.PE, MetNwp.TdSfc850, MetNwp.LCL, MetNwp.KI, MetNwp.CAPE,
-    MetGis.LAT, MetGis.LON, MetGis.DEM, MetGis.MONTH, MetGis.HOUR,
+    MetGis.LAT, MetGis.LON, MetGis.DEM, MetGis.MONTH_SIN, MetGis.MONTH_COS, MetGis.HOUR_SIN, MetGis.HOUR_COS
 ]
 
 
@@ -36,8 +37,10 @@ class MetSample:
     
     task_mode: str = field(default_factory=lambda: 'precipitation')
     default_shape: Tuple[int, int] = field(default_factory=lambda: (301, 301))
-    max_timesteps: int = field(default_factory=lambda: 20)
-    
+    max_timesteps: int = field(default_factory=lambda: 10)
+    # [新增] 明确定义输出帧数为 20
+    out_timesteps: int = field(default_factory=lambda: 20)
+
     _gis_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = field(default_factory=dict, init=False, repr=False)
     _sample_id_parts: Optional[List[str]] = field(default=None, init=False, repr=False)
 
@@ -222,7 +225,11 @@ class MetSample:
         target_data = []
         valid_mask = []
 
-        for timestamp in self.timestamps[self.max_timesteps:]:
+        start_idx = self.max_timesteps
+        end_idx = start_idx + self.out_timesteps
+        target_timestamps = self.timestamps[start_idx : end_idx]
+
+        for timestamp in target_timestamps:
             file_path = os.path.join(
                 self.base_path,
                 MetVar.LABEL.name,
@@ -284,11 +291,11 @@ class MetSample:
 
     def _load_nwp_frame(self, var: MetNwp, timestamp: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]: # type: ignore
         obs_time = self.str_to_datetime(timestamp)
-        # TODO
+
         if obs_time.minute < 30:
-            obs_time = obs_time.replace(minute=0) + timedelta(hours=2)
+            obs_time = obs_time.replace(minute=0)
         else:
-            obs_time = obs_time.replace(minute=0) + timedelta(hours=3)
+            obs_time = obs_time.replace(minute=0) + timedelta(hours=1)
 
         file_path = os.path.join(
             self.base_path, var.parent, var.name, 
@@ -309,30 +316,71 @@ class MetSample:
 
     def _load_gis_frame(self, var: MetGis, timestamp: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """
-        加载GIS数据帧。GIS数据通常是空间不变或时间恒定的，所以 Mask 应该全为 True。
+        加载GIS数据帧。
+        对于静态数据(DEM/LAT/LON)，从文件加载；
+        对于时间数据(MONTH/HOUR)，采用周期性编码 (Sin/Cos) 动态生成。
         """
+        # GIS数据通常被认为是全局有效的，初始 Mask 全为 True
         full_mask = np.full(self.default_shape, True, dtype=bool)
-
-        # 处理时间相关的GIS数据 (MONTH, HOUR)
-        if var == MetGis.MONTH or var == MetGis.HOUR:
+        
+        # --- 处理周期性时间变量 ---
+        if var in [MetGis.MONTH_SIN, MetGis.MONTH_COS, MetGis.HOUR_SIN, MetGis.HOUR_COS]:
             try:
                 obs_time = self.str_to_datetime(timestamp)
-                raw_value = float(obs_time.month) if var == MetGis.MONTH else float(obs_time.hour)
+                raw_val = 0.0
                 
+                # 计算周期性数值
+                if var in [MetGis.MONTH_SIN, MetGis.MONTH_COS]:
+                    # 月份周期为 12
+                    # 将 1-12 映射到角度。 (month / 12) * 2pi
+                    angle = 2 * math.pi * float(obs_time.month) / 12.0
+                    raw_val = math.sin(angle) if var == MetGis.MONTH_SIN else math.cos(angle)
+                    
+                elif var in [MetGis.HOUR_SIN, MetGis.HOUR_COS]:
+                    # 小时周期为 24
+                    # 将 0-23 映射到角度。 (hour / 24) * 2pi
+                    angle = 2 * math.pi * float(obs_time.hour) / 24.0
+                    raw_val = math.sin(angle) if var == MetGis.HOUR_SIN else math.cos(angle)
+                
+                # 归一化处理
+                # MetGis 定义中 min=-1, max=1
+                # 归一化公式: (x - min) / (max - min) => (x - (-1)) / 2 => (x + 1) / 2
+                # 结果将映射到 [0, 1] 区间，符合网络输入规范
                 min_val, max_val = self._get_channel_limits(var)
-                normalized_value = (raw_value - min_val) / (max_val - min_val)
+                if max_val - min_val > 0:
+                    normalized_value = (raw_val - min_val) / (max_val - min_val)
+                else:
+                    normalized_value = 0.5 # 默认中间值
                 
-                return np.full(self.default_shape, normalized_value, dtype=np.float32), full_mask
-            except (ValueError, AttributeError):
-                # 时间解析失败，返回零填充数据和全 False mask
+                # 裁剪保险
+                normalized_value = max(0.0, min(1.0, normalized_value))
+                
+                # 填充整个空间网格
+                data = np.full(self.default_shape, normalized_value, dtype=np.float32)
+                return data, full_mask
+                
+            except (ValueError, AttributeError, Exception) as e:
+                # 异常兜底
                 return np.zeros(self.default_shape, dtype=np.float32), np.zeros(self.default_shape, dtype=bool)
-        
-        # 处理文件类型的GIS数据 (LAT, LON, DEM)
-        file_path = os.path.join(self.gis_data_path, self.station_id, f"{var.value}.npy")
-        min_val, max_val = self._get_channel_limits(var)
-        
-        data, mask = self.normalize(file_path, min_val, max_val)
-        return data, mask
+
+        # --- 处理静态 GIS 文件数据 (LAT, LON, DEM) ---
+        try:
+            # 文件名映射：MetGis.LAT.value -> "lat.npy"
+            file_name = f"{var.value}.npy"
+            file_path = os.path.join(self.gis_data_path, self.station_id, file_name)
+            
+            min_val, max_val = self._get_channel_limits(var)
+            
+            # 使用通用的 normalize 方法加载并归一化
+            data, mask = self.normalize(file_path, min_val, max_val)
+            
+            if data is None:
+                return np.zeros(self.default_shape, dtype=np.float32), np.zeros(self.default_shape, dtype=bool)
+                
+            return data, mask
+
+        except Exception:
+            return np.zeros(self.default_shape, dtype=np.float32), np.zeros(self.default_shape, dtype=bool)
 
     def _preload_gis_data(self):
         """预加载所有GIS数据到缓存"""

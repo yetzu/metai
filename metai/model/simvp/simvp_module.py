@@ -688,22 +688,32 @@ class AdaptiveFusionGate(nn.Module):
 
 
 class MambaSubBlock(nn.Module):
+    """
+    [SOTA Optimized] SimVP Mamba Block with Bidirectional SS2D Scanning.
+    
+    Optimization:
+    1. Decoupled Horizontal and Vertical Mamba instances to capture anisotropic features.
+    2. Uses Adaptive Fusion Gate to dynamically weigh H and V features.
+    3. Token Space operations to minimize permute overhead.
+    """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, **kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         
-        # 注意：确保你的 Mamba 实现支持共享权重，或者这里实例化是否需要调整
-        # 通常 mamba_ssm 库的 Mamba 模块如果传入相同的 args 会创建独立的权重
-        # 如果你想真正"复用权重"，可能需要显式处理，但在 Visual Mamba 中通常是独立的两个 Mamba 层
-        # 或者是同一个实例跑两次（这里你的写法是同一个实例跑4次扫描，这是为了节省参数量，合理的）
-        self.mamba = Mamba(
+        # [优化] 分离水平和垂直方向的 Mamba 实例
+        # 共享权重会限制模型捕捉各向异性特征的能力（如降水云团通常有特定的移动方向）
+        # 使用两个独立的 Mamba 可以显著增加模型容量，且计算量增加不多（主要是参数量增加）
+        mamba_cfg = dict(
             d_model=dim,
-            d_state=32,
+            d_state=16, # 16 对于视觉任务通常足够，且节省显存
             d_conv=4,
-            expand=2,
+            expand=2,   # 视觉 Mamba 标准配置，比 NLP 的 4 更轻量
         )
         
-        # 使用优化后的融合门
+        self.mamba_h = Mamba(**mamba_cfg)
+        self.mamba_v = Mamba(**mamba_cfg)
+        
+        # 使用自适应融合门
         self.fusion_gate = AdaptiveFusionGate(dim=dim, reduction=4)
         
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -713,7 +723,7 @@ class MambaSubBlock(nn.Module):
             in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
     def forward(self, x):
-        # x: [B, C, H, W] (SimVP 通常是 NCHW 输入)
+        # x: [B, C, H, W]
         B, C, H, W = x.shape
         L = H * W
         
@@ -721,34 +731,31 @@ class MambaSubBlock(nn.Module):
         x_hw = x.permute(0, 2, 3, 1).contiguous() 
         x_token = x_hw.view(B, -1, C) # [B, L, C]
         
-        # 2. Mamba 处理 (Token Space)
+        # 2. Mamba 处理 (SS2D Scanning)
         x_norm = self.norm1(x_token)
-        
-        # --- 扫描准备 ---
-        # 显式 view 确保形状正确
         x_hw_norm = x_norm.view(B, H, W, C)
         
         # --- 水平扫描 (Horizontal) ---
-        # 展平为 [B, L, C]
+        # 使用 mamba_h
         x_h_flat = x_hw_norm.view(B, -1, C) 
-        out_h_fwd = self.mamba(x_h_flat)
-        # flip([1]) 在 token 维度翻转
-        out_h_bwd = self.mamba(x_h_flat.flip([1])).flip([1])
-        out_h_combined = (out_h_fwd + out_h_bwd).view(B, H, W, C)
+        out_h_fwd = self.mamba_h(x_h_flat)
+        # 后向扫描共享同一个 mamba_h 实例是常见做法，利用权重捕捉反向依赖
+        out_h_bwd = self.mamba_h(x_h_flat.flip([1])).flip([1])
+        out_h_combined = out_h_fwd + out_h_bwd # 简单求和或平均
         
         # --- 垂直扫描 (Vertical) ---
-        # 转置为 [B, W, H, C] 然后展平，这样 sequential 读取时就是垂直方向
-        # 注意使用 contiguous() 避免内存碎片导致的 view 错误
+        # 使用 mamba_v
+        # 转置为 [B, W, H, C] 以便连续内存读取
         x_v_flat = x_hw_norm.transpose(1, 2).contiguous().view(B, -1, C)
         
-        out_v_fwd = self.mamba(x_v_flat)
-        out_v_bwd = self.mamba(x_v_flat.flip([1])).flip([1])
+        out_v_fwd = self.mamba_v(x_v_flat)
+        out_v_bwd = self.mamba_v(x_v_flat.flip([1])).flip([1])
         
         # 还原形状: [B, L, C] -> [B, W, H, C] -> [B, H, W, C]
         out_v_combined = (out_v_fwd + out_v_bwd).view(B, W, H, C).transpose(1, 2)
         
         # --- 自适应融合 ---
-        # 输入和输出都是 [B, H, W, C]，无需 permute
+        # 输入: [B, H, W, C], [B, H, W, C]
         mamba_out_hw = self.fusion_gate(out_h_combined, out_v_combined)
         mamba_out = mamba_out_hw.view(B, L, C)
         
@@ -762,7 +769,7 @@ class MambaSubBlock(nn.Module):
         # Residual 2
         x_token = x_token + self.drop_path(mlp_out)
         
-        # 4. 转换回 Image 空间: [B, L, C] -> [B, H, W, C] -> [B, C, H, W]
+        # 4. 转换回 Image 空间: [B, H, W, C] -> [B, C, H, W]
         x_out = x_token.view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
         
         return x_out

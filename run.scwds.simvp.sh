@@ -44,25 +44,28 @@ case $MODE in
             --accumulate_grad_batches 2 \
             --num_workers 8 \
             \
-            --in_shape 20 28 256 256 \
+            --in_shape 10 30 256 256 \
+            --aft_seq_length 20 \
             --max_epochs 100 \
             --opt adamw \
-            --lr 1e-4 \
+            --lr 1e-3 \
             --sched cosine \
-            --min_lr 1e-6 \
+            --min_lr 1e-5 \
             --warmup_epoch 5 \
             \
             --model_type mamba \
             --hid_S 128 \
-            --hid_T 256 \
+            --hid_T 512 \
             --N_S 4 \
             --N_T 12 \
-            --mlp_ratio 4.0 \
-            --drop 0.1 \
+            --mlp_ratio 8.0 \
+            --drop 0.0 \
             --drop_path 0.1 \
             --spatio_kernel_enc 5 \
             --spatio_kernel_dec 5 \
+            \
             --use_curriculum_learning true \
+            --early_stop_patience 50 \
             --accelerator cuda \
             --devices 0,1,2,3 \
             --precision bf16-mixed
