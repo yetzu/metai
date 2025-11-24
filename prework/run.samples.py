@@ -54,17 +54,18 @@ def main():
     is_debug = True if args.debug else False
     config = get_config(is_debug=is_debug)
     
+    print(config)
+    
     total_cnt = right_cnt = sample_cnt = 0
     file_path = os.path.join("data", "cases.csv")
     df = pd.read_csv(file_path, header=0, names=['case_id', 'size'])
     case_ids = df['case_id'].tolist()
-    
+
     for case_id in case_ids[:]:
         case = MetCase.create(case_id, config)
-        
-        samples = case.to_samples(sample_length=40, sample_interval=20)
+
+        samples = case.to_samples(sample_length=40, sample_interval=5)
         MLOGI(f"Case id: {case_id}，标签文件数量: {len(case.label_files)}，样本数: {len(samples)}")
-    
         if samples:
             case_samples = [{"sample_id": f"{case_id}_{case.radar_type}_{(idx+1):03d}", "timestamps": to_timestr_list(sample)} 
                           for idx, sample in enumerate(samples)]

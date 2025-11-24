@@ -146,15 +146,16 @@ class SimVP(l.LightningModule):
             self.log(f"train/weight_{k}", v, on_epoch=True)
 
     def on_train_epoch_end(self):
-        """在每个训练epoch结束后执行测试脚本（后台执行，不阻塞训练）"""
+        """
+        🚀 [优化] 后台非阻塞式测试
+        原理：生成一个包含等待逻辑的 Python 代码字符串，在独立子进程中运行。
+        主进程不会在此处等待，从而不会影响 GPU 的训练效率。
+        """
         if self.trainer.is_global_zero and self.auto_test_after_epoch:
             try:
-                if not self.test_script_path:
-                    return
-                
+                if not self.test_script_path: return
                 script_path = str(self.test_script_path)
                 if not os.path.isabs(script_path):
-                    # 尝试定位到项目根目录
                     current_file = os.path.abspath(__file__)
                     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
                     script_path = os.path.join(project_root, script_path)
@@ -163,66 +164,74 @@ class SimVP(l.LightningModule):
                     print(f"[WARNING] Test script not found: {script_path}")
                     return
                 
-                epoch = self.current_epoch
-                
-                # 获取 checkpoint 保存目录
+                # 确定保存目录
                 save_dir = None
                 if hasattr(self, 'hparams'):
-                    # hparams 可能是 dict 或 Namespace
-                    if isinstance(self.hparams, dict):
-                        save_dir = self.hparams.get('save_dir', None)
-                    else:
-                        save_dir = getattr(self.hparams, 'save_dir', None)
-                
-                if save_dir is None:
-                    save_dir = getattr(self.trainer, 'default_root_dir', None)
-                
-                # 等待 checkpoint 文件出现
-                if save_dir:
-                    max_wait_time = 300  # 最多等待 5 分钟
-                    check_interval = 2  # 每 2 秒检查一次
-                    waited_time = 0
-                    ckpt_pattern = os.path.join(save_dir, '*.ckpt')
-                    
-                    print(f"\n[INFO] Epoch {epoch} done. Waiting for checkpoint in {save_dir}...")
-                    
-                    while waited_time < max_wait_time:
-                        ckpt_files = glob.glob(ckpt_pattern)
-                        if len(ckpt_files) > 0:
-                            # 找到最新的 checkpoint
-                            latest_ckpt = max(ckpt_files, key=os.path.getmtime)
-                            print(f"[INFO] Checkpoint found: {latest_ckpt}")
-                            break
-                        time.sleep(check_interval)
-                        waited_time += check_interval
-                        if waited_time % 10 == 0:  # 每 10 秒打印一次等待信息
-                            print(f"[INFO] Still waiting for checkpoint... ({waited_time}s/{max_wait_time}s)")
-                    else:
-                        print(f"[WARNING] Timeout waiting for checkpoint after {max_wait_time}s. Proceeding anyway...")
-                
-                # 日志目录
+                    save_dir = self.hparams.get('save_dir') if isinstance(self.hparams, dict) else getattr(self.hparams, 'save_dir', None)
+                if save_dir is None: save_dir = getattr(self.trainer, 'default_root_dir', os.getcwd())
+
                 script_dir = os.path.dirname(script_path) or os.getcwd()
                 log_dir = os.path.join(script_dir, 'test_logs')
                 os.makedirs(log_dir, exist_ok=True)
                 
+                epoch = self.current_epoch
                 log_file = os.path.join(log_dir, f'test_epoch_{epoch:03d}.log')
                 
-                print(f"[INFO] Launching background test: {script_path}")
+                print(f"[INFO] Epoch {epoch} done. Spawning background test job -> {log_file}")
                 
-                # 后台执行
-                log_fd = open(log_file, 'w')
-                try:
-                    subprocess.Popen(
-                        ['bash', script_path, 'test'], # 传递 'test' 参数给脚本
-                        stdout=log_fd,
-                        stderr=subprocess.STDOUT,
-                        cwd=script_dir,
-                        start_new_session=True 
-                    )
-                    log_fd.close() 
-                except Exception as proc_error:
-                    if log_fd: log_fd.close()
-                    raise proc_error
+                # --- 构造后台执行的 Python 代码 ---
+                # 这段代码会在子进程中运行：先等待ckpt生成，再运行测试脚本
+                background_code = f"""
+import os
+import time
+import glob
+import subprocess
+import sys
+
+save_dir = r'{save_dir}'
+script_path = r'{script_path}'
+epoch = {epoch}
+max_wait = 600 # 等待超时时间 (秒)
+
+# 1. 等待 Checkpoint 生成
+start_time = time.time()
+found = False
+while time.time() - start_time < max_wait:
+    # 查找当前 epoch 的 ckpt
+    files = glob.glob(os.path.join(save_dir, "*.ckpt"))
+    # 简单逻辑：如果有新文件生成 (通常是 epoch=XX-val_score=XX.ckpt)
+    # 只要目录下有文件，且最新的文件看起来是新的，就可以尝试
+    # 更精确：匹配文件名
+    target = [f for f in files if f"epoch={{epoch:02d}}" in f]
+    
+    if target:
+        # 确保文件写入完成 (简单 check: 大小不再变化)
+        size1 = os.path.getsize(target[0])
+        time.sleep(2)
+        if os.path.getsize(target[0]) == size1 and size1 > 0:
+            found = True
+            break
+    
+    time.sleep(5)
+
+# 2. 执行测试
+with open(r'{log_file}', 'w') as f:
+    if found:
+        f.write(f"[Background] Found checkpoint for Epoch {{epoch}}. Starting Test...\\n")
+        f.flush()
+        try:
+            subprocess.run(['bash', script_path, 'test'], stdout=f, stderr=subprocess.STDOUT, cwd=r'{script_dir}')
+        except Exception as e:
+            f.write(f"\\n[Background Error] {{e}}\\n")
+    else:
+        f.write(f"[Background] Timeout waiting for checkpoint in {{save_dir}}. Test Skipped.\\n")
+"""
+                # 启动非阻塞子进程
+                subprocess.Popen(
+                    [sys.executable, '-c', background_code],
+                    cwd=script_dir,
+                    start_new_session=True # 关键：脱离当前进程组，防止被 kill
+                )
                 
             except Exception as e:
                 print(f"[ERROR] Failed to launch test script: {e}")

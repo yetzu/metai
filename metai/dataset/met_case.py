@@ -399,7 +399,7 @@ class MetCase:
         Returns:
             List[List[str]]: 生成的样本列表
         """
-        valid_sequences =  self.get_valid_sequences(min_length=sample_length, max_interval_minutes=sample_interval)
+        valid_sequences =  self.get_valid_sequences(min_length=sample_length, max_interval_minutes=20)
 
         samples = []
         
