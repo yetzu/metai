@@ -66,20 +66,6 @@ def restore_stdout():
         _logger.close()
         _logger = None
 
-def create_diff_cmap():
-    """创建中间色为 #30123B 的差异图 colormap"""
-    middle_color = (0.188, 0.071, 0.231, 1.0)
-    colors = [
-        (0.0, 0.0, 1.0, 1.0),
-        (0.0, 0.3, 0.8, 1.0),
-        middle_color,
-        (0.9, 0.2, 0.0, 1.0),
-        (1.0, 0.0, 0.0, 1.0),
-    ]
-    n_bins = 256
-    cmap = LinearSegmentedColormap.from_list('diff_turbo', colors, N=n_bins)
-    return cmap
-
 def find_best_ckpt(save_dir: str) -> str:
     # 优先查找 best.ckpt
     best = os.path.join(save_dir, 'best.ckpt')
@@ -90,10 +76,20 @@ def find_best_ckpt(save_dir: str) -> str:
     if os.path.exists(last): return last
     
     # 最后查找所有 checkpoint 文件，返回最新的
-    cpts = sorted(glob.glob(os.path.join(save_dir, '*.ckpt')))
-    if len(cpts) == 0:
+    # 排除 'last.ckpt' 以免干扰排序 (如果 glob 包含它)
+    cpts = glob.glob(os.path.join(save_dir, '*.ckpt'))
+    cpts = [c for c in cpts if 'last.ckpt' not in c and 'best.ckpt' not in c]
+    
+    if len(cpts) > 0:
+        # 按修改时间或文件名排序，这里按文件名排序通常能取到 epoch 最大的
+        cpts = sorted(cpts)
+        return cpts[-1]
+        
+    # 如果只有 best/last 但前面没捕获到（理论上不可能），再兜底
+    all_cpts = sorted(glob.glob(os.path.join(save_dir, '*.ckpt')))
+    if len(all_cpts) == 0:
         raise FileNotFoundError(f'No checkpoint found in {save_dir}')
-    return cpts[-1]
+    return all_cpts[-1]
 
 def get_checkpoint_info(ckpt_path: str):
     """从 checkpoint 文件中提取训练关键信息（不打印）"""
@@ -125,30 +121,30 @@ def print_checkpoint_info(ckpt_info: dict):
     hparams = ckpt_info.get('hparams', {})
     if hparams:
         print(f"  Model Type: {hparams.get('model_type', 'N/A')}")
-        print(f"  Hidden Dim (T): {hparams.get('hid_T', 'N/A')}")
+        print(f"  In Shape: {hparams.get('in_shape', 'N/A')}")
+        print(f"  Out Seq Length: {hparams.get('aft_seq_length', 'N/A')}")
     print("=" * 80)
 
 # ==========================================
 # Part 1: 全局评分配置 (Metric Configuration)
 # ==========================================
 class MetricConfig:
-    # 反归一化参数 (假设数据归一化时除以了30)
+    # [关键确认] MM_MAX = 30.0
+    # 物理含义：数据中的最大整数值 300 对应 30.0 mm 降水
+    # 模型输出 [0, 1] -> 映射到 [0, 30.0] mm
     MM_MAX = 30.0
     
-    # 噪音阈值 (小于此值的预测视为0，用于拿到 0mm 档的 0.1 分)
-    # 0.05mm 是一个经验值，既能过滤浮点噪声，又不会误杀有效小雨
+    # 噪音阈值 (mm)
     THRESHOLD_NOISE = 0.05 
     
-    # 阈值边缘 (mm) - 对应表2
-    # 区间: [0, 0.1), [0.1, 1.0), [1.0, 2.0), [2.0, 5.0), [5.0, 8.0), [8.0, inf)
+    # 阈值边缘 (mm)
     LEVEL_EDGES = np.array([0.0, 0.1, 1.0, 2.0, 5.0, 8.0, np.inf], dtype=np.float32)
     
-    # 降水等级权重 (表2)
+    # 降水等级权重
     _raw_level_weights = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.3], dtype=np.float32)
-    # 归一化权重 (虽然原始和已为1，但保险起见)
     LEVEL_WEIGHTS = _raw_level_weights / _raw_level_weights.sum()
 
-    # 时效权重 (表1) - 对应索引 0-19 (6min - 120min)
+    # 时效权重 (0-19 帧，对应 2 小时)
     TIME_WEIGHTS_DICT = {
         0: 0.0075, 1: 0.02, 2: 0.03, 3: 0.04, 4: 0.05,
         5: 0.06, 6: 0.07, 7: 0.08, 8: 0.09, 9: 0.1,
@@ -171,11 +167,14 @@ class MetricConfig:
 # ==========================================
 def calc_seq_metrics(true_seq, pred_seq, verbose=True):
     """
-    计算序列的降水评分指标 (Strict implementation of Contest Rules)
+    计算序列的降水评分指标
+    true_seq: (T, H, W) 归一化值 [0, 1]
+    pred_seq: (T, H, W) 归一化值 [0, 1]
     """
     T, H, W = true_seq.shape
     
     # 1. 预处理：噪音过滤
+    # 转换阈值到归一化空间： 0.05 / 30.0
     pred_clean = pred_seq.copy()
     pred_clean[pred_clean < (MetricConfig.THRESHOLD_NOISE / MetricConfig.MM_MAX)] = 0.0
     
@@ -191,10 +190,9 @@ def calc_seq_metrics(true_seq, pred_seq, verbose=True):
     corr_sum = 0.0
 
     if verbose:
-        print(f"True Stats: Max={np.max(tru_mm_seq):.2f}, Mean={np.mean(tru_mm_seq):.2f}")
-        print(f"Pred Stats: Max={np.max(prd_mm_seq):.2f}, Mean={np.mean(prd_mm_seq):.2f}")
-        print("-" * 90) # 加长分隔线
-        # 增加 W_time 列
+        print(f"True Stats (mm): Max={np.max(tru_mm_seq):.2f}, Mean={np.mean(tru_mm_seq):.2f}")
+        print(f"Pred Stats (mm): Max={np.max(prd_mm_seq):.2f}, Mean={np.mean(prd_mm_seq):.2f}")
+        print("-" * 90)
         print(f"{'T':<3} | {'Corr(R)':<9} | {'TS_w_sum':<9} | {'Score_k':<9} | {'W_time':<8}")
         print("-" * 90)
 
@@ -248,14 +246,12 @@ def calc_seq_metrics(true_seq, pred_seq, verbose=True):
         score_k_list.append(Score_k)
 
         if verbose:
-            # 补全 W_time 打印
             print(f"{t:<3} | {R_k:<9.4f} | {weighted_sum_metrics:<9.4f} | {Score_k:<9.4f} | {time_weights[t]:<8.4f}")
 
     score_k_arr = np.array(score_k_list)
     final_score = np.sum(score_k_arr * time_weights)
     
     print("-" * 90)
-    labels = ["0mm", "0.1-1", "1-2", "2-5", "5-8", ">=8"]
     ts_str = ", ".join([f"{v:.3f}" for v in ts_mean_levels])
     mae_str = ", ".join([f"{v:.3f}" for v in mae_mm_mean_levels])
     
@@ -263,7 +259,6 @@ def calc_seq_metrics(true_seq, pred_seq, verbose=True):
     print(f"[METRIC] MAE_mean (Levels): {mae_str}")
     print(f"[METRIC] Corr_mean: {corr_sum / T:.4f}")
     print(f"[METRIC] Final_Weighted_Score: {final_score:.6f}")
-    # 补全 Score_per_t 打印 (非常重要，用于分析衰减)
     print(f"[METRIC] Score_per_t: {', '.join([f'{s:.3f}' for s in score_k_arr])}")
     print("-" * 90)
     
@@ -277,37 +272,45 @@ def calc_seq_metrics(true_seq, pred_seq, verbose=True):
 # Part 3: 绘图功能 (Visualization)
 # ==========================================
 def plot_seq_visualization(obs_seq, true_seq, pred_seq, scores, out_path, vmax=1.0):
-    """绘制 Obs, GT, Pred, Diff 对比图"""
-    T = true_seq.shape[0]
+    """
+    绘制 Obs, GT, Pred, Diff 对比图
+    obs_seq: (T_in, H, W)
+    true_seq: (T_out, H, W)
+    pred_seq: (T_out, H, W)
+    """
+    T = true_seq.shape[0] # T_out = 20
     rows, cols = 4, T
     
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.5, rows * 1.5), constrained_layout=True)
     if T == 1: axes = axes[:, np.newaxis]
 
     for t in range(T):
-        # 1. Obs
+        # 1. Obs (Input) - 注意处理 T_in < T_out 的情况
         if t < obs_seq.shape[0]:
             axes[0, t].imshow(obs_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
+            axes[0, t].set_title(f'In-{t}', fontsize=6)
         else:
-            axes[0, t].imshow(np.zeros_like(true_seq[0]), cmap='gray')
+            # 超过输入长度的部分显示为空白或灰色
+            axes[0, t].imshow(np.zeros_like(true_seq[0]), cmap='gray', vmin=0.0, vmax=1.0)
         axes[0, t].axis('off')
-        if t == 0: axes[0, t].set_title('Obs', fontsize=8)
+        if t == 0: axes[0, t].set_ylabel('Obs', fontsize=8)
 
-        # 2. GT
+        # 2. GT (Target)
         axes[1, t].imshow(true_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
         axes[1, t].axis('off')
-        if t == 0: axes[1, t].set_title('GT', fontsize=8)
+        if t == 0: axes[1, t].set_ylabel('GT', fontsize=8)
+        axes[1, t].set_title(f'T+{t+1}', fontsize=6)
 
         # 3. Pred
         axes[2, t].imshow(pred_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
         axes[2, t].axis('off')
-        if t == 0: axes[2, t].set_title('Pred', fontsize=8)
+        if t == 0: axes[2, t].set_ylabel('Pred', fontsize=8)
         
         # 4. Diff (GT - Pred)
         diff = true_seq[t] - pred_seq[t]
         axes[3, t].imshow(diff, cmap='bwr', vmin=-0.5, vmax=0.5)
         axes[3, t].axis('off')
-        if t == 0: axes[3, t].set_title('Diff', fontsize=8)
+        if t == 0: axes[3, t].set_ylabel('Diff', fontsize=8)
 
     print(f'[INFO] Saving Plot to {out_path}')
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -321,10 +324,11 @@ def render(obs_seq, true_seq, pred_seq, out_path: str, vmax: float = 1.0):
     # 1. 数据格式统一 (转 Numpy & 提取通道)
     def to_numpy_ch(x, ch=0):
         if isinstance(x, torch.Tensor): x = x.detach().cpu().numpy()
-        if x.ndim == 4: x = x[:, ch] # (T, C, H, W) -> (T, H, W)
+        # 输入维度 (T, C, H, W), 通道 0 是雷达/降水标签
+        if x.ndim == 4: x = x[:, ch] 
         return x
 
-    obs = to_numpy_ch(obs_seq)
+    obs = to_numpy_ch(obs_seq) # 取 ch=0 (Radar/Label)
     tru = to_numpy_ch(true_seq)
     prd = to_numpy_ch(pred_seq)
     
@@ -343,7 +347,15 @@ def render(obs_seq, true_seq, pred_seq, out_path: str, vmax: float = 1.0):
 def parse_args():
     parser = argparse.ArgumentParser(description='Test SCWDS SimVP Model')
     parser.add_argument('--data_path', type=str, default='data/samples.jsonl')
-    parser.add_argument('--in_shape', type=int, nargs=4, default=[20, 28, 128, 128])
+    
+    # [关键修改] 更新默认输入形状: 10帧, 54通道 (30基础+24未来NWP)
+    parser.add_argument('--in_shape', type=int, nargs=4, default=[10, 54, 256, 256],
+                        help='Input shape (T, C, H, W). Default: [10, 54, 256, 256]')
+    
+    # [关键新增] 增加 aft_seq_length，默认20
+    parser.add_argument('--aft_seq_length', type=int, default=20,
+                        help='Output sequence length. Default: 20')
+                        
     parser.add_argument('--save_dir', type=str, default='./output/simvp')
     parser.add_argument('--num_samples', type=int, default=10)
     parser.add_argument('--accelerator', type=str, default='cuda')
@@ -354,19 +366,21 @@ def main():
     device = torch.device(args.accelerator if torch.cuda.is_available() else 'cpu')
     
     # 1. Config & Model
+    # 初始化 Config 对象，主要用于获取 resize_shape
+    # 注意: aft_seq_length 会通过 hparams 从 checkpoint 加载，这里 Config 仅作辅助
     config = SimVPConfig(
         data_path=args.data_path,
         in_shape=tuple(args.in_shape),
-        save_dir=args.save_dir
+        save_dir=args.save_dir,
+        aft_seq_length=args.aft_seq_length
     )
     resize_shape = (config.in_shape[2], config.in_shape[3])
     
-    # 先获取 checkpoint 信息（不打印）
+    # 查找并加载 checkpoint
     ckpt_path = find_best_ckpt(config.save_dir)
     ckpt_info = get_checkpoint_info(ckpt_path)
     epoch = ckpt_info.get('epoch', None)
     
-    # 如果无法从 checkpoint 获取 epoch，使用默认值
     if epoch is None:
         epoch = 0
     
@@ -374,29 +388,30 @@ def main():
     out_dir = os.path.join(config.save_dir, f'vis_{epoch:02d}')
     os.makedirs(out_dir, exist_ok=True)
     
-    # 初始化日志系统，将打印信息保存到文件
+    # 设置日志
     log_file_path = os.path.join(out_dir, 'log.txt')
     set_logger(log_file_path)
     
-    # 现在开始打印信息（会被保存到日志文件）
     print(f"[INFO] Starting Test on {device}")
     print_checkpoint_info(ckpt_info)
-    if ckpt_info.get('epoch') is None:
-        print(f"[WARNING] 无法获取 epoch，使用默认值: {epoch}")
+    print(f"[INFO] Input Shape: {args.in_shape}")
+    print(f"[INFO] Output Length: {args.aft_seq_length}")
+    print(f"[INFO] Metric MM_MAX: {MetricConfig.MM_MAX}")
     print(f"[INFO] 可视化结果将保存到: {out_dir}")
-    print(f"[INFO] 日志信息将保存到: {log_file_path}")
     
     # 加载模型
     model = SimVP.load_from_checkpoint(ckpt_path)
     model.eval().to(device)
     
     # 2. Data
+    # 使用 ScwdsDataModule，它会自动调用更新后的 MetSample
     data_module = ScwdsDataModule(
         data_path=config.data_path,
         resize_shape=resize_shape,
         batch_size=1,
         num_workers=4
     )
+    # setup('test') 会准备 test_dataloader
     data_module.setup('test')
     test_loader = data_module.test_dataloader()
     
@@ -407,6 +422,8 @@ def main():
             metadata_batch, batch_x, batch_y, target_mask, input_mask = batch
             
             # Inference
+            # batch_x: [1, 10, 54, 256, 256]
+            # batch_y: [1, 20, 1, 256, 256]
             outputs = model.test_step(
                 (metadata_batch, batch_x.to(device), batch_y.to(device), target_mask.to(device), input_mask.to(device)), 
                 bidx
@@ -414,6 +431,10 @@ def main():
             
             # Render
             save_path = os.path.join(out_dir, f'sample_{bidx:03d}.png')
+            
+            # outputs['inputs']: [10, 54, H, W] -> render 取 ch=0 -> Past Radar
+            # outputs['trues']: [20, 1, H, W]
+            # outputs['preds']: [20, 1, H, W]
             s = render(outputs['inputs'], outputs['trues'], outputs['preds'], save_path)
             scores.append(s)
             
@@ -423,12 +444,10 @@ def main():
     if len(scores) > 0:
         print(f"\n[FINAL] Average Score ({len(scores)} samples): {np.mean(scores):.6f}")
     
-    # 恢复标准输出并关闭日志文件
     restore_stdout()
 
 if __name__ == '__main__':
     try:
         main()
     finally:
-        # 确保即使出错也恢复标准输出
         restore_stdout()

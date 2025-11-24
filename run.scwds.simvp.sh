@@ -44,7 +44,7 @@ case $MODE in
             --accumulate_grad_batches 2 \
             --num_workers 8 \
             \
-            --in_shape 10 30 256 256 \
+            --in_shape 10 54 256 256 \
             --aft_seq_length 20 \
             --max_epochs 100 \
             --opt adamw \
@@ -81,7 +81,8 @@ case $MODE in
         
         python run/test_scwds_simvp.py \
             --data_path data/samples.jsonl \
-            --in_shape 20 28 256 256 \
+            --in_shape 10 54 256 256 \
+            --aft_seq_length 20 \
             --save_dir ./output/simvp \
             --num_samples 10 \
             --accelerator cuda

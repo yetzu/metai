@@ -65,7 +65,8 @@ class SimVP(l.LightningModule):
              model_type=config.get('model_type', 'mamba'), out_channels=config.get('out_channels', 1),
              mlp_ratio=config.get('mlp_ratio', 8.0), drop=config.get('drop', 0.0), drop_path=config.get('drop_path', 0.1),
              spatio_kernel_enc=config.get('spatio_kernel_enc', 3), 
-             spatio_kernel_dec=config.get('spatio_kernel_dec', 3)
+             spatio_kernel_dec=config.get('spatio_kernel_dec', 3),
+             aft_seq_length=config.get('aft_seq_length', 20)
         )
     
     def configure_optimizers(self) -> OptimizerLRScheduler:

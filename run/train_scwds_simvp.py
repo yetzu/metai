@@ -24,7 +24,7 @@ def parse_args():
     # 基础参数
     parser.add_argument('--data_path', type=str, default='data/samples.jsonl', help='Path to training data')
     parser.add_argument('--save_dir', type=str, default=None, help='Output directory')
-    parser.add_argument('--in_shape', type=int, nargs=4, default=[10, 30, 256, 256])
+    parser.add_argument('--in_shape', type=int, nargs=4, default=[10, 54, 256, 256])
     parser.add_argument('--aft_seq_length', type=int, default=20)
     parser.add_argument('--resize_shape', type=int, nargs=2, default=None)
     parser.add_argument('--batch_size', type=int, default=4)
