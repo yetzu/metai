@@ -79,6 +79,8 @@ class SimVP_Model(nn.Module):
 
         # Readout: 将特征图映射回预测目标 (out_channels=1)
         self.readout = nn.Conv2d(hid_S, out_channels, kernel_size=1)
+        # 将偏置初始化为 -5.0，这样初始 sigmoid(x) ≈ 0.0067 (接近0)
+        nn.init.constant_(self.readout.bias, -5.0)
 
     def forward(self, x_raw, **kwargs):
         # x_raw: [B, T_in, C_in, H, W]
