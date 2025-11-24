@@ -24,14 +24,17 @@ def parse_args():
     # 基础参数
     parser.add_argument('--data_path', type=str, default='data/samples.jsonl', help='Path to training data')
     parser.add_argument('--save_dir', type=str, default=None, help='Output directory')
-    parser.add_argument('--in_shape', type=int, nargs=4, default=[10, 54, 256, 256])
-    parser.add_argument('--aft_seq_length', type=int, default=20)
+    # [注意] 这里默认值设为 None，以优先使用 Config 中的 SOTA 默认配置 (10, 54, 256, 256)
+    parser.add_argument('--in_shape', type=int, nargs=4, default=None) 
     parser.add_argument('--resize_shape', type=int, nargs=2, default=None)
-    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--batch_size', type=int, default=None)
     parser.add_argument('--max_epochs', type=int, default=None)
     parser.add_argument('--task_mode', type=str, default=None)
     parser.add_argument('--num_workers', type=int, default=None)
     
+    # [关键新增] 预测序列长度 (10帧输入 -> 20帧输出)
+    parser.add_argument('--aft_seq_length', type=int, default=None, help='Output sequence length (prediction frames)')
+
     # 模型结构参数
     parser.add_argument('--model_type', type=str, default=None)
     parser.add_argument('--hid_S', type=int, default=None)
@@ -67,6 +70,11 @@ def parse_args():
     # 课程学习
     parser.add_argument('--use_curriculum_learning', type=str, default=None) # 兼容 'true'/'false' 字符串
     
+    # [关键新增] 早停参数
+    parser.add_argument('--early_stop_patience', type=int, default=None, help='Patience for early stopping')
+    parser.add_argument('--early_stop_monitor', type=str, default=None)
+    parser.add_argument('--early_stop_mode', type=str, default=None)
+
     # Resume
     parser.add_argument('--ckpt_path', type=str, default=None)
 
@@ -83,6 +91,8 @@ def detect_precision():
 def main():
     torch.set_float32_matmul_precision('high')
     args = parse_args()
+    
+    # 过滤掉 None 的参数，优先使用 Config 类的默认值
     config_kwargs = {k: v for k, v in vars(args).items() if v is not None}
     
     if 'in_shape' in config_kwargs: config_kwargs['in_shape'] = tuple(config_kwargs['in_shape'])
@@ -110,6 +120,7 @@ def main():
         config_kwargs['use_curriculum_learning'] = config_kwargs['use_curriculum_learning'].lower() == 'true'
     
     try:
+        # 使用过滤后的参数初始化 Config
         config = SimVPConfig(**config_kwargs)
     except ValidationError as e:
         print(f"[ERROR] Config Validation: {e}")
@@ -119,7 +130,6 @@ def main():
 
     data_module = ScwdsDataModule(
         data_path=config.data_path,
-        aft_seq_length=config.aft_seq_length,
         resize_shape=config.resize_shape,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
@@ -148,31 +158,31 @@ def main():
             verbose=True
         ),
         
-        # 2. 保存 Top-3 最优模型 (替换自定义 TopKCheckpoint)
+        # 2. 保存 Top-3 最优模型
         ModelCheckpoint(
             dirpath=config.save_dir, 
             filename="{epoch:02d}-{val_score:.4f}",
             monitor=monitor_metric,
             save_top_k=3, 
             mode=monitor_mode,
-            save_last=False # 由下面的 Checkpoint 处理 last
+            save_last=False 
         ),
         
         # 3. 总是保存 last.ckpt (用于 Resume)
         ModelCheckpoint(
             dirpath=config.save_dir, 
             filename="last",
-            save_top_k=0, # 不根据指标保存
-            save_last=True, # 强制保存 last.ckpt
+            save_top_k=0, 
+            save_last=True, 
             every_n_epochs=1
         ),
         
-        # 4. 定期保存 (每5轮) (替换自定义 PeriodicCheckpoint)
+        # 4. 定期保存 (每5轮)
         ModelCheckpoint(
             dirpath=config.save_dir, 
             filename="periodic-{epoch:02d}",
             every_n_epochs=5, 
-            save_top_k=-1 # 保留所有定期检查点，不删除
+            save_top_k=-1 
         ), 
         
         LearningRateMonitor(logging_interval="step")
@@ -188,8 +198,6 @@ def main():
         elif isinstance(devices, list) and len(devices) > 1: use_ddp = True
         elif isinstance(devices, int) and devices > 1: use_ddp = True
     
-    # 优化: 除非模型有未使用的参数(如 GAN)，否则设为 False 以提升速度
-    # SimVP 是全连接的，设为 False 更快
     strategy = 'ddp_find_unused_parameters_false' if use_ddp else 'auto'
 
     trainer = l.Trainer(
@@ -212,6 +220,9 @@ def main():
     )
 
     print(f"Starting Training: Model={config.model_type}, Shape={config.in_shape} -> {config.resize_shape}")
+    print(f"  Patience: {config.early_stop_patience}")
+    print(f"  Curriculum: {config.use_curriculum_learning}")
+    print(f"  Input Channels: {config.in_shape[1]}, Output Frames: {config.aft_seq_length}")
     
     resume_ckpt = args.ckpt_path
     if resume_ckpt is None:

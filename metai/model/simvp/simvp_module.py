@@ -690,30 +690,21 @@ class AdaptiveFusionGate(nn.Module):
 class MambaSubBlock(nn.Module):
     """
     [SOTA Optimized] SimVP Mamba Block with Bidirectional SS2D Scanning.
-    
-    Optimization:
-    1. Decoupled Horizontal and Vertical Mamba instances to capture anisotropic features.
-    2. Uses Adaptive Fusion Gate to dynamically weigh H and V features.
-    3. Token Space operations to minimize permute overhead.
     """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, **kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         
-        # [优化] 分离水平和垂直方向的 Mamba 实例
-        # 共享权重会限制模型捕捉各向异性特征的能力（如降水云团通常有特定的移动方向）
-        # 使用两个独立的 Mamba 可以显著增加模型容量，且计算量增加不多（主要是参数量增加）
         mamba_cfg = dict(
             d_model=dim,
-            d_state=16, # 16 对于视觉任务通常足够，且节省显存
+            d_state=16,
             d_conv=4,
-            expand=2,   # 视觉 Mamba 标准配置，比 NLP 的 4 更轻量
+            expand=2,
         )
         
         self.mamba_h = Mamba(**mamba_cfg)
         self.mamba_v = Mamba(**mamba_cfg)
         
-        # 使用自适应融合门
         self.fusion_gate = AdaptiveFusionGate(dim=dim, reduction=4)
         
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -736,18 +727,15 @@ class MambaSubBlock(nn.Module):
         x_hw_norm = x_norm.view(B, H, W, C)
         
         # --- 水平扫描 (Horizontal) ---
-        # 使用 mamba_h
         x_h_flat = x_hw_norm.view(B, -1, C) 
         out_h_fwd = self.mamba_h(x_h_flat)
-        # 后向扫描共享同一个 mamba_h 实例是常见做法，利用权重捕捉反向依赖
         out_h_bwd = self.mamba_h(x_h_flat.flip([1])).flip([1])
-        out_h_combined = out_h_fwd + out_h_bwd # 简单求和或平均
+        
+        # [关键修正] 必须加 .view(B, H, W, C) 将序列还原为图像网格
+        out_h_combined = (out_h_fwd + out_h_bwd).view(B, H, W, C)
         
         # --- 垂直扫描 (Vertical) ---
-        # 使用 mamba_v
-        # 转置为 [B, W, H, C] 以便连续内存读取
         x_v_flat = x_hw_norm.transpose(1, 2).contiguous().view(B, -1, C)
-        
         out_v_fwd = self.mamba_v(x_v_flat)
         out_v_bwd = self.mamba_v(x_v_flat.flip([1])).flip([1])
         
