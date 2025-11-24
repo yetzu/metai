@@ -17,7 +17,7 @@ class SimVPConfig(BaseModel):
     # [关键修改] 输入形状调整
     # T=10: 输入 10 帧 (过去1小时)
     # C=30: 28 (原通道) + 2 (GIS 时间周期编码增量) = 30
-    in_shape: Tuple[int, int, int, int] = Field(default=(10, 30, 256, 256), description="输入形状 (T, C, H, W)")
+    in_shape: Tuple[int, int, int, int] = Field(default=(10, 54, 256, 256), description="输入形状 (T, C, H, W)")
 
     # [关键新增] 输出序列长度
     # T_out=20: 预测 20 帧 (未来2小时)

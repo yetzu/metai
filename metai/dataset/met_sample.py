@@ -188,37 +188,95 @@ class MetSample:
     
     def load_input_data(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        加载输入数据和有效值mask
+        [SOTA 改进] 加载输入数据，采用 Early Fusion 策略融合未来 NWP。
+        结构: 
+        1. 基础输入 (10帧): [Radar, Past_NWP, GIS]
+        2. 未来引导 (20帧折叠为10帧): [Future_NWP]
         
         Returns:
-            tuple: (input_data, input_mask)
-                - input_data: 形状为 (T, C, H, W) 的 float32 数组
-                - input_mask: 形状为 (T, C, H, W) 的 bool 数组，指示哪些值是原始有效值（未被补齐或零填充）
+            input_data: (T=10, C_total, H, W)
+            input_mask: (T=10, C_total, H, W)
         """
-        timesteps = self.timestamps[:self.max_timesteps]
+        # 1. 定义时间范围
+        # 输入时间: T=0 ~ T=9 (过去1小时)
+        past_timesteps = self.timestamps[:self.max_timesteps] 
+        # 未来引导时间: T=10 ~ T=29 (未来2小时) -> 对应输出的时刻
+        future_start = self.max_timesteps
+        future_end = future_start + self.out_timesteps
+        future_timesteps = self.timestamps[future_start:future_end]
         
-        # 预加载所有GIS数据到缓存
+        # 预加载 GIS
         self._preload_gis_data()
 
-        time_series: List[np.ndarray] = []
-        time_series_mask: List[np.ndarray] = []
+        # --- A. 加载基础输入 (Past 10 Frames) ---
+        past_series = []
+        past_masks = []
         
-        for i, timestamp in enumerate(timesteps):
-            channel_frames: List[np.ndarray] = []
-            channel_masks: List[np.ndarray] = []
-            
+        for i, timestamp in enumerate(past_timesteps):
+            frames = []
+            masks = []
             for channel in self.channels:
-                data, mask = self._load_channel_frame_with_fallback(channel, timestamp, i, timesteps)
-                channel_frames.append(data)
-                channel_masks.append(mask)
+                data, mask = self._load_channel_frame_with_fallback(channel, timestamp, i, self.timestamps)
+                frames.append(data)
+                masks.append(mask)
+            past_series.append(np.stack(frames, axis=0))
+            past_masks.append(np.stack(masks, axis=0))
+            
+        # Shape: (10, C_base, H, W)
+        input_base = np.stack(past_series, axis=0)
+        mask_base = np.stack(past_masks, axis=0)
 
-            stacked_channels = np.stack(channel_frames, axis=0)  # (C, H, W)
-            stacked_masks = np.stack(channel_masks, axis=0)      # (C, H, W)
-            time_series.append(stacked_channels)
-            time_series_mask.append(stacked_masks)
+        # --- B. 加载未来 NWP 引导 (Future 20 Frames) ---
+        # 筛选出 NWP 通道
+        nwp_channels = [c for c in self.channels if isinstance(c, MetNwp)]
+        
+        if len(nwp_channels) > 0 and len(future_timesteps) == self.out_timesteps:
+            future_nwp_series = []
+            future_nwp_masks = []
+            
+            # 加载 20 帧未来 NWP
+            for i, timestamp in enumerate(future_timesteps):
+                frames = []
+                masks = []
+                for channel in nwp_channels:
+                    # 注意：这里我们只加载 NWP
+                    # 对于未来数据，如果缺测，也尝试 fallback，或者补0
+                    # 由于 _load_channel_frame_with_fallback 需要全局索引，这里简单处理直接调 _load_nwp_frame
+                    # 或者复用 fallback 逻辑，注意 index 偏移
+                    global_idx = future_start + i
+                    data, mask = self._load_channel_frame_with_fallback(channel, timestamp, global_idx, self.timestamps)
+                    frames.append(data)
+                    masks.append(mask)
+                future_nwp_series.append(np.stack(frames, axis=0))
+                future_nwp_masks.append(np.stack(masks, axis=0))
+            
+            # Shape: (20, C_nwp, H, W)
+            input_future_nwp = np.stack(future_nwp_series, axis=0)
+            mask_future_nwp = np.stack(future_nwp_masks, axis=0)
+            
+            # --- C. 时间折叠 (Temporal Folding) ---
+            # 将 20 帧折叠为 10 帧: (20, C, H, W) -> (10, 2, C, H, W) -> (10, 2*C, H, W)
+            # 这样第 i 帧输入就包含了第 2i 和 2i+1 帧的未来指引
+            B_t, C_n, H_t, W_t = input_future_nwp.shape
+            fold_factor = self.out_timesteps // self.max_timesteps # 20 // 10 = 2
+            
+            if self.out_timesteps % self.max_timesteps == 0:
+                input_folded = input_future_nwp.reshape(self.max_timesteps, fold_factor * C_n, H_t, W_t)
+                mask_folded = mask_future_nwp.reshape(self.max_timesteps, fold_factor * C_n, H_t, W_t)
+                
+                # --- D. 拼接 ---
+                # Final: (10, C_base + 2*C_nwp, H, W)
+                input_data = np.concatenate([input_base, input_folded], axis=1)
+                input_mask = np.concatenate([mask_base, mask_folded], axis=1)
+            else:
+                # 如果不能整除 (极少见)，直接放弃拼接未来 NWP，避免报错
+                input_data = input_base
+                input_mask = mask_base
+        else:
+            # 如果没有 NWP 通道或未来时间步不足
+            input_data = input_base
+            input_mask = mask_base
 
-        input_data = np.stack(time_series, axis=0)       # (T, C, H, W)
-        input_mask = np.stack(time_series_mask, axis=0)  # (T, C, H, W)
         return input_data, input_mask
 
     def load_target_data(self) -> tuple[np.ndarray, np.ndarray]:

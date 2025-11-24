@@ -24,7 +24,8 @@ def parse_args():
     # 基础参数
     parser.add_argument('--data_path', type=str, default='data/samples.jsonl', help='Path to training data')
     parser.add_argument('--save_dir', type=str, default=None, help='Output directory')
-    parser.add_argument('--in_shape', type=int, nargs=4, default=[20, 29, 128, 128])
+    parser.add_argument('--in_shape', type=int, nargs=4, default=[10, 30, 256, 256])
+    parser.add_argument('--aft_seq_length', type=int, default=20)
     parser.add_argument('--resize_shape', type=int, nargs=2, default=None)
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--max_epochs', type=int, default=None)
@@ -118,6 +119,7 @@ def main():
 
     data_module = ScwdsDataModule(
         data_path=config.data_path,
+        aft_seq_length=config.aft_seq_length,
         resize_shape=config.resize_shape,
         batch_size=config.batch_size,
         num_workers=config.num_workers,

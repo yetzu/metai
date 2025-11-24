@@ -57,6 +57,7 @@ class ScwdsDataModule(LightningDataModule):
         self,
         data_path: str = "data/samples.jsonl",
         resize_shape: tuple[int, int] = (256, 256),
+        aft_seq_length: int = 20,
         batch_size: int = 4,
         num_workers: int = 8,
         pin_memory: bool = True,
