@@ -58,11 +58,11 @@ case $MODE in
             \
             --model.in_shape "[10, 31, 256, 256]" \
             --model.aft_seq_length 20 \
-            --model.hid_S 64 \
-            --model.hid_T 256 \
+            --model.hid_S 128 \
+            --model.hid_T 512 \
             --model.N_S 4 \
             --model.N_T 8 \
-            --model.lr 5e-4 \
+            --model.lr 1e-3 \
             --model.min_lr 1e-5 \
             --model.warmup_epoch 10 \
             --model.use_curriculum_learning true \

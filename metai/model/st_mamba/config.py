@@ -11,22 +11,24 @@ class MeteoMambaConfig(BaseModel):
     aft_seq_length: int = 20
     
     # --- 模型参数 ---
-    hid_S: int = 64
-    hid_T: int = 256
+    hid_S: int = 128
+    hid_T: int = 512
     N_S: int = 4
     N_T: int = 8
+    spatio_kernel_enc: int = 3
+    spatio_kernel_dec: int = 3
     
     # --- 训练参数 ---
     batch_size: int = 4
     accumulate_grad_batches: int = 4 
-    max_epochs: int = 100
+    max_epochs: int = 50
     
     # --- 优化器与调度器 (Fix: 移除了硬编码，参数化配置) ---
     opt: str = "adamw"
-    lr: float = 5e-4
+    lr: float = 1e-3
     min_lr: float = 1e-5
     warmup_lr: float = 1e-5
-    warmup_epoch: int = 10
+    warmup_epoch: int = 5
     weight_decay: float = 0.05
     momentum: float = 0.9
     sched: str = "cosine"

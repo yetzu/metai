@@ -127,26 +127,27 @@ class MeteoMambaModule(l.LightningModule):
             }
             
         else:
-            # Phase 3: Metric Sprint
+            # Phase 3: Metric Sprint (全速冲刺指标)
             p = (epoch - phase_2_end) / (max_epochs - phase_2_end)
             weights = {
-                'l1': 5.0 - p * 4.0,    # L1 进一步降低
+                'l1': 5.0 - p * 4.0,    # L1 降至 1.0
                 'ssim': 1.0 - p * 0.5,
-                'evo': 0.1 + p * 0.4,
+                'evo': 0.1 + p * 0.4,   # 增加物理约束
                 'spec': 0.05 + p * 0.15,
-                'csi': 0.5 + (5.0 - 0.5) * (p**2),
-                'focal': 5.0 + p * 5.0  # [New] Focal 继续增加到 10.0
+                'csi': 0.5 + (10.0 - 0.5) * (p**2), # [强化] CSI 权重极大增加，主攻评分
+                'focal': 5.0 + p * 5.0 
             }
 
-            # 冻结 Encoder
-            if not getattr(self, 'encoder_frozen', False):
-                print(f"\n[Curriculum] Epoch {epoch}: Phase 3 Start. Freezing Encoder.")
-                if hasattr(self.model, 'enc'):
-                    self.model.enc.eval()
-                    for param in self.model.enc.parameters():
+            # [修改] 仅仅降低 Encoder 学习率而非完全冻结，或者只冻结最底层的 Stem
+            # 这里演示冻结 Stem (3D 卷积部分)，保留 2D ConvSC 微调
+            if not getattr(self, 'stem_frozen', False):
+                print(f"\n[Curriculum] Epoch {epoch}: Phase 3. Freezing 3D Stem only.")
+                if hasattr(self.model, 'enc') and hasattr(self.model.enc, 'stem'):
+                    self.model.enc.stem.eval()
+                    for param in self.model.enc.stem.parameters():
                         param.requires_grad = False
-                self.encoder_frozen = True
-
+                self.stem_frozen = True
+                
         # 更新 Loss 权重
         if hasattr(self, 'criterion') and hasattr(self.criterion, 'weights'):
             self.criterion.weights.update(weights)
