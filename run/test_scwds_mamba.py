@@ -33,8 +33,8 @@ def restore_stdout(): global _logger; sys.stdout = _logger.console if _logger el
 class MetricConfig:
     MM_MAX = 30.0
     THRESHOLD_NOISE = 0.05 
-    LEVEL_EDGES = np.array([0.0, 0.1, 1.0, 2.0, 5.0, 8.0, np.inf], dtype=np.float32)
-    _raw_level_weights = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.3], dtype=np.float32)
+    LEVEL_EDGES = np.array([0.1, 1.0, 2.0, 5.0, 8.0, np.inf], dtype=np.float32)
+    _raw_level_weights = np.array([0.1, 0.1, 0.2, 0.25, 0.35], dtype=np.float32)
     LEVEL_WEIGHTS = _raw_level_weights / _raw_level_weights.sum()
     TIME_WEIGHTS_DICT = {
         0: 0.0075, 1: 0.02, 2: 0.03, 3: 0.04, 4: 0.05,
