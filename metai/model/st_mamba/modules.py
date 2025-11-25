@@ -56,17 +56,27 @@ class ConvSC(nn.Module):
         return self.conv(x)
 
 # ==========================================
-# 2. SOTA 组件 (TokenSpaceMLP & AdaptiveGate)
+# 2. SOTA 组件 (LocalityEnhancedMLP & AdaptiveGate)
 # ==========================================
-class TokenSpaceMLP(nn.Module):
+class LocalityEnhancedMLP(nn.Module):
     """
-    Token Space MLP: 直接在 Token 维度 [B, L, C] 操作，避免 Reshape 开销
+    [Optimization] Locality Enhanced MLP (原 TokenSpaceMLP 升级版)
+    
+    改进点：
+    在 Token Space 的 Linear 层之间引入 3x3 Depth-wise Conv。
+    Mamba 擅长全局依赖，DWConv 补充局部纹理细节，这对短临降水预测非常关键。
     """
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
+        
         self.fc1 = nn.Linear(in_features, hidden_features)
+        
+        # [New] Depth-wise Convolution for Locality
+        # groups=hidden_features makes it depth-wise (channel-independent)
+        self.dwconv = nn.Conv2d(hidden_features, hidden_features, 3, 1, 1, bias=True, groups=hidden_features)
+        
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
@@ -76,9 +86,38 @@ class TokenSpaceMLP(nn.Module):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None: nn.init.constant_(m.bias, 0)
 
-    def forward(self, x):
-        return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
+    def forward(self, x, H, W):
+        """
+        Args:
+            x: [B, L, C] where L = T*H*W
+            H, W: Spatial dimensions for reshaping
+        """
+        # 1. Projection
+        x = self.fc1(x) # [B, L, hidden]
+        
+        # 2. Locality Enhancement (DWConv)
+        B, L, C = x.shape
+        T = L // (H * W)
+        
+        # Reshape: [B, T*H*W, C] -> [B*T, C, H, W]
+        # 将 Batch 和 Time 维度合并处理，对每帧进行空间卷积
+        x_spatial = x.view(B * T, H, W, C).permute(0, 3, 1, 2)
+        
+        x_spatial = self.dwconv(x_spatial)
+        
+        # Flatten back: [B*T, C, H, W] -> [B, L, C]
+        x = x_spatial.permute(0, 2, 3, 1).view(B, L, C)
+        
+        # 3. Activation & Output
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x
 
 class AdaptiveFusionGate(nn.Module):
     """
@@ -147,12 +186,15 @@ class STMambaBlock(nn.Module):
     """
     [SOTA] Spatiotemporal Mamba Block (Bidirectional)
     结合双向空间扫描 (Spatial) 和 双向时间扫描 (Temporal) + 自适应融合。
+    优化：Locality Enhanced MLP 和 扩展的 State Dimension。
     """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         
-        mamba_cfg = dict(d_model=dim, d_state=16, d_conv=4, expand=2)
+        # [Optimization] State Expansion
+        # 将 d_state 从 16 提升至 32，增加 SSM 记忆容量，捕捉更长时序依赖
+        mamba_cfg = dict(d_model=dim, d_state=32, d_conv=4, expand=2)
         
         # Branch 1: Spatial
         self.scan_spatial = Mamba(**mamba_cfg)
@@ -166,9 +208,9 @@ class STMambaBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = nn.LayerNorm(dim)
         
-        # Token Space MLP
+        # [Optimization] 使用 LocalityEnhancedMLP 替代纯 Linear MLP
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = TokenSpaceMLP(dim, mlp_hidden_dim, dim, act_layer=act_layer, drop=drop)
+        self.mlp = LocalityEnhancedMLP(dim, mlp_hidden_dim, dim, act_layer=act_layer, drop=drop)
         
         self.apply(self._init_weights)
 
@@ -208,7 +250,9 @@ class STMambaBlock(nn.Module):
         x = self.fusion_gate(out_s, out_t)
         
         x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        
+        # [Optimization] Pass spatial dimensions H, W to MLP for DWConv
+        x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
         
         # Restore: [B, T, C, H, W]
         return x.reshape(B, T, H, W, C).permute(0, 1, 4, 2, 3)

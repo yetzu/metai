@@ -84,31 +84,65 @@ class MeteoMambaModule(l.LightningModule):
             scheduler.step(metric) if metric is not None else scheduler.step()
 
     def on_train_epoch_start(self):
-        if not self.hparams.use_curriculum_learning: return
         epoch = self.current_epoch
         max_epochs = self.hparams.max_epochs
         
-        phase_1_end = int(0.2 * max_epochs)
-        phase_2_end = int(0.6 * max_epochs)
+        # 阶段定义
+        phase_1_end = int(0.1 * max_epochs) # Structure (0-10%)
+        phase_2_end = int(0.4 * max_epochs) # Physics Warmup (10-40%)
         
         weights = {}
+        phase_name = ""
+        
         if epoch < phase_1_end:
-            weights = {'l1': 10.0, 'ssim': 1.0, 'evo': 0.0, 'spec': 0.0, 'csi': 0.0}
+            # Phase 1: 强结构约束
+            # 初始阶段主要靠 L1 快速收敛结构
+            weights = {'l1': 10.0, 'ssim': 1.0, 'evo': 0.0, 'spec': 0.0, 'csi': 0.0, 'focal': 0.0}
+            phase_name = "Structure"
+            
         elif epoch < phase_2_end:
+            # Phase 2: 物理预热 (逐步引入 Focal Loss 替换部分 L1)
             p = (epoch - phase_1_end) / (phase_2_end - phase_1_end)
             weights = {
-                'l1': 10.0 - p * 5.0, 'ssim': 1.0,
-                'evo': p * 0.1, 'spec': p * 0.05, 'csi': p * 0.5
+                'l1': 10.0 - p * 5.0,   # L1 降低
+                'ssim': 1.0,
+                'evo': p * 0.1,
+                'spec': p * 0.05,
+                'csi': p * 0.5,
+                'focal': p * 5.0        # [新增] Focal 权重逐渐增加，接管部分 L1 功能
             }
+            phase_name = "Physics Warmup"
+            
         else:
+            # Phase 3: 指标冲刺 (Metric Sprint)
             p = (epoch - phase_2_end) / (max_epochs - phase_2_end)
             weights = {
-                'l1': 5.0 - p * 4.0, 'ssim': 1.0 - p * 0.5,
-                'evo': 0.1 + p * 0.4, 'spec': 0.05 + p * 0.15,
-                'csi': 0.5 + (5.0 - 0.5) * (p**2)
+                'l1': 5.0 - p * 4.0,    # L1 进一步降低
+                'ssim': 1.0 - p * 0.5,
+                'evo': 0.1 + p * 0.4,
+                'spec': 0.05 + p * 0.15,
+                'csi': 0.5 + (5.0 - 0.5) * (p**2), # CSI 主导
+                'focal': 5.0 + p * 5.0  # [新增] Focal 继续增加，强化稀疏区预测
             }
-        self.criterion.weights.update(weights)
-        for k, v in weights.items(): self.log(f"train/weight_{k}", v, on_epoch=True, sync_dist=True)
+            phase_name = "Metric Sprint"
+
+            # [关键操作] 冻结 Encoder (仅执行一次)
+            if not getattr(self, 'encoder_frozen', False):
+                print(f"\n[Curriculum] Epoch {epoch}: Phase 3 Start. Freezing Spatial Encoder to preserve features.")
+                # 冻结 SimVP/Mamba 的 Encoder 部分
+                if hasattr(self.model, 'enc'):
+                    self.model.enc.eval() # 设置为 eval 模式 (影响 BN/Dropout)
+                    for param in self.model.enc.parameters():
+                        param.requires_grad = False
+                self.encoder_frozen = True
+
+        # 更新 Loss 权重
+        if hasattr(self, 'criterion') and hasattr(self.criterion, 'weights'):
+            self.criterion.weights.update(weights)
+            
+        # 记录日志
+        for k, v in weights.items():
+            self.log(f"train/weight_{k}", v, on_epoch=True, sync_dist=True)
 
     def _interpolate_batch(self, batch_tensor: torch.Tensor, mode: str = 'max_pool') -> torch.Tensor:
         """
