@@ -93,21 +93,8 @@ class SimVP(l.LightningModule):
     
     def on_train_epoch_start(self):
         """
-        🚀 [SOTA] 课程学习机制 (Curriculum Learning)
-        
-        阶段设计逻辑:
-        1. Phase 1 (0-20%): Structure Warmup. 
-           利用 L1 的强凸性快速下降，禁止 Evo/Spec/CSI 干扰，确保大尺度结构正确。
-        
-        2. Phase 2 (20-50%): Texture & Physics Recovery.
-           L1 权重线性衰减 (10.0 -> 1.0)，对抗模糊。
-           引入 Evo (物理一致性) 和 Spec (频域去模糊) 准备细节。
-        
-        3. Phase 3 (50-100%): Metric Sprint.
-           L1 降维 (0.1)，防止其平滑高回波。
-           CSI 权重指数级拉升 (0.5 -> 10.0)，利用 Soft-CSI 的梯度微调像素跨越 0.1/1.0/5.0 阈值。
-           
-        注意: 必须配合 min_lr >= 1e-5 使用，否则 Phase 3 梯度无法更新。
+        🚀 [SOTA] 课程学习机制 (Curriculum Learning) - Safe Mode 修正版
+        防止 Phase 2 结构崩塌
         """
         if not self.use_curriculum_learning:
             return
@@ -116,54 +103,52 @@ class SimVP(l.LightningModule):
         max_epochs = getattr(self.hparams, 'max_epochs', 100)
         
         # 动态定义阶段边界
-        phase_1_end = int(0.2 * max_epochs)
-        phase_2_end = int(0.5 * max_epochs)
+        phase_1_end = int(0.2 * max_epochs) # Epoch 20
+        phase_2_end = int(0.6 * max_epochs) # Epoch 60 (延长 Phase 2)
         
         weights = {}
         phase_name = ""
 
         if epoch < phase_1_end:
-            # === Phase 1: 结构热身 ===
+            # === Phase 1: 结构热身 (Structure) ===
             # 高 L1，中 SSIM，其他关闭
             weights = {'l1': 10.0, 'ssim': 1.0, 'evo': 0.0, 'spec': 0.0, 'csi': 0.0}
             phase_name = "Phase 1: Structure (Convex)"
             
         elif epoch < phase_2_end:
-            # === Phase 2: 物理与纹理重构 ===
-            # 过渡: L1 下降, Evo/Spec 上升
+            # === Phase 2 (Safe Mode): 物理微调 ===
+            # 修正：大幅提高 L1 底线 (1.0 -> 5.0)，大幅降低 Evo/Spec 权重
             progress = (epoch - phase_1_end) / (phase_2_end - phase_1_end)
             
-            # L1: 10.0 -> 1.0
-            l1_w = 10.0 - progress * (10.0 - 1.0)
+            # L1: 10.0 -> 5.0 (保留强约束)
+            l1_w = 10.0 - progress * (10.0 - 5.0)
             # SSIM: 1.0 -> 1.0 (保持)
             ssim_w = 1.0
-            # Evo: 0.0 -> 2.0
-            evo_w = progress * 2.0
-            # Spec: 0.0 -> 0.5 (开始去模糊)
-            spec_w = progress * 0.5
-            # CSI: 0.0 -> 0.5 (预热)
+            # Evo: 0.0 -> 0.1 (极低权重，防止噪点爆炸)
+            evo_w = progress * 0.1
+            # Spec: 0.0 -> 0.05 (极低权重)
+            spec_w = progress * 0.05
+            # CSI: 0.0 -> 0.5 (缓慢预热)
             csi_w = progress * 0.5
             
             weights = {'l1': l1_w, 'ssim': ssim_w, 'evo': evo_w, 'spec': spec_w, 'csi': csi_w}
-            phase_name = f"Phase 2: Texture & Physics [p={progress:.2f}]"
+            phase_name = f"Phase 2 (Safe): Physics Warmup [p={progress:.2f}]"
             
         else:
-            # === Phase 3: 指标极速冲刺 ===
-            # L1 几乎移除，CSI 暴力拉升
+            # === Phase 3: 指标冲刺 ===
             progress = (epoch - phase_2_end) / (max_epochs - phase_2_end)
             
-            # L1: 1.0 -> 0.1 (仅做正则，允许高回波预测)
-            l1_w = 1.0 - progress * (1.0 - 0.1)
-            # SSIM: 1.0 -> 0.5 (适度降低)
+            # L1: 5.0 -> 1.0 (最终也不低于 1.0)
+            l1_w = 5.0 - progress * (5.0 - 1.0)
+            # SSIM: 1.0 -> 0.5
             ssim_w = 1.0 - progress * 0.5
-            # Evo: 2.0 (保持物理约束)
-            evo_w = 2.0
-            # Spec: 0.5 -> 1.0 (加强锐度)
-            spec_w = 0.5 + progress * 0.5
+            # Evo: 0.1 -> 0.5 (缓慢增加)
+            evo_w = 0.1 + progress * 0.4
+            # Spec: 0.05 -> 0.2
+            spec_w = 0.05 + progress * 0.15
             
-            # CSI: 0.5 -> 10.0 (指数增长)
-            # 这里的梯度会很大，所以需要 min_lr 足够大来承接
-            csi_w = 0.5 + (10.0 - 0.5) * (progress ** 2)
+            # CSI: 0.5 -> 5.0 (主要提分项)
+            csi_w = 0.5 + (5.0 - 0.5) * (progress ** 2)
             
             weights = {'l1': l1_w, 'ssim': ssim_w, 'evo': evo_w, 'spec': spec_w, 'csi': csi_w}
             phase_name = f"Phase 3: Metric Sprint [p={progress:.2f}]"
@@ -174,7 +159,7 @@ class SimVP(l.LightningModule):
         
         # 记录日志
         if self.trainer.is_global_zero:
-            w_str = ", ".join([f"{k}={v:.2f}" for k, v in weights.items()])
+            w_str = ", ".join([f"{k}={v:.4f}" for k, v in weights.items()])
             print(f"\n[Curriculum] Epoch {epoch}/{max_epochs} | {phase_name}")
             print(f"             Weights: {w_str}")
         

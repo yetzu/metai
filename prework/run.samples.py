@@ -9,9 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from metai.utils import MLOGE, MLOGI, get_config
 from metai.dataset import MetCase
 
-def save_samples(samples_data):
+def save_samples(samples_data, sample_interval=10):
     """保存样本数据到JSONL文件，支持高效追加写入"""
-    output_file = "data/samples.jsonl"
+    output_file = f"data/samples.interval{sample_interval}.jsonl"
     
     # 直接追加写入，无需读取现有数据
     with open(output_file, 'a', encoding='utf-8') as f:
@@ -61,21 +61,21 @@ def main():
     df = pd.read_csv(file_path, header=0, names=['case_id', 'size'])
     case_ids = df['case_id'].tolist()
 
+    sample_interval = 10
     for case_id in case_ids[:]:
         case = MetCase.create(case_id, config)
-
-        samples = case.to_samples(sample_length=40, sample_interval=5)
+        samples = case.to_samples(sample_length=30, sample_interval=sample_interval)
         MLOGI(f"Case id: {case_id}，标签文件数量: {len(case.label_files)}，样本数: {len(samples)}")
         if samples:
             case_samples = [{"sample_id": f"{case_id}_{case.radar_type}_{(idx+1):03d}", "timestamps": to_timestr_list(sample)} 
                           for idx, sample in enumerate(samples)]
-            save_samples(case_samples)
+            save_samples(case_samples, sample_interval=sample_interval)
             right_cnt += 1
             sample_cnt += len(samples)
         
         total_cnt += 1
     
-    MLOGI(f"总个例: {total_cnt}，有效个例: {right_cnt} ({100*right_cnt/total_cnt:.1f}%)，总样本: {sample_cnt}")
+    MLOGI(f"sample_interval: {sample_interval}，总个例: {total_cnt}，有效个例: {right_cnt} ({100*right_cnt/total_cnt:.1f}%)，总样本: {sample_cnt}")
         
 if __name__ == "__main__":
     main()

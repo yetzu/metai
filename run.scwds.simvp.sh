@@ -33,13 +33,14 @@ case $MODE in
     # ============================================================
     "train")
         echo "--------------------------------------------------------"
-        echo "🚀 [4x A800] 开始训练 SimVP 基座模型 (BF16 Mixed)..."
+        echo "🚀 [4x A800] 开始训练 Mamba 基座模型 (BF16 Mixed)..."
         echo "--------------------------------------------------------"
         
+        # [新增] 指定回滚的权重路径
         python run/train_scwds_simvp.py \
             --data_path data/samples.jsonl \
             --save_dir ./output/simvp \
-            \
+            --ckpt_path ./output/simvp/periodic-epoch=19.ckpt \
             --batch_size 4 \
             --accumulate_grad_batches 2 \
             --num_workers 4 \
@@ -48,7 +49,7 @@ case $MODE in
             --aft_seq_length 20 \
             --max_epochs 100 \
             --opt adamw \
-            --lr 1e-3 \
+            --lr 1e-4 \
             --sched cosine \
             --min_lr 1e-5 \
             --warmup_epoch 5 \
@@ -68,7 +69,9 @@ case $MODE in
             --early_stop_patience 50 \
             --accelerator cuda \
             --devices 0,1,2,3 \
-            --precision bf16-mixed
+            --precision bf16-mixed \
+            --gradient_clip_val 0.5 \
+            --gradient_clip_algorithm norm
         ;;
         
     # ============================================================

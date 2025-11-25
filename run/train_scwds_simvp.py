@@ -54,6 +54,8 @@ def parse_args():
     parser.add_argument('--min_lr', type=float, default=None)
     parser.add_argument('--warmup_epoch', type=int, default=None)
     parser.add_argument('--accumulate_grad_batches', type=int, default=None)
+    parser.add_argument('--gradient_clip_val', type=float, default=None)
+    parser.add_argument('--gradient_clip_algorithm', type=str, default=None)
     
     # 设备
     parser.add_argument('--accelerator', type=str, default=None)
@@ -211,6 +213,7 @@ def main():
         log_every_n_steps=config.log_every_n_steps,
         val_check_interval=config.val_check_interval,
         gradient_clip_val=config.gradient_clip_val,
+        gradient_clip_algorithm=config.gradient_clip_algorithm,
         accumulate_grad_batches=config.accumulate_grad_batches,
         strategy=strategy,
         sync_batchnorm=False, 
