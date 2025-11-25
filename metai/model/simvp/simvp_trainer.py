@@ -105,8 +105,8 @@ class SimVP(l.LightningModule):
         max_epochs = getattr(self.hparams, 'max_epochs', 100)
         
         # 动态定义阶段边界
-        phase_1_end = int(0.2 * max_epochs) # Epoch 20
-        phase_2_end = int(0.6 * max_epochs) # Epoch 60 (延长 Phase 2)
+        phase_1_end = int(0.1 * max_epochs) # Epoch 20
+        phase_2_end = int(0.4 * max_epochs) # Epoch 60 (延长 Phase 2)
         
         weights = {}
         phase_name = ""

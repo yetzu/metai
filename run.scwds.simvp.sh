@@ -41,15 +41,15 @@ case $MODE in
             --data_path data/samples.jsonl \
             --save_dir ./output/simvp \
             --ckpt_path ./output/simvp/periodic-epoch=19.ckpt \
-            --batch_size 4 \
-            --accumulate_grad_batches 4 \
-            --num_workers 4 \
+            --batch_size 16 \
+            --accumulate_grad_batches 1 \
+            --num_workers 16 \
             \
             --in_shape 10 31 256 256 \
             --aft_seq_length 20 \
-            --max_epochs 100 \
+            --max_epochs 50 \
             --opt adamw \
-            --lr 5e-4 \
+            --lr 1e-3 \
             --sched cosine \
             --min_lr 1e-5 \
             --warmup_epoch 5 \
@@ -64,7 +64,7 @@ case $MODE in
             --drop_path 0.2 \
             \
             --use_curriculum_learning true \
-            --early_stop_patience 30 \
+            --early_stop_patience 10 \
             --accelerator cuda \
             --devices 0,1,2,3 \
             --precision bf16-mixed \
