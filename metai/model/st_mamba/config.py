@@ -4,7 +4,7 @@ from typing import Tuple
 class MeteoMambaConfig(BaseModel):
     # 路径与基础
     data_path: str = "data/samples.jsonl"
-    save_dir: str = "./output/meteo_mamba"
+    save_dir: str = "./output/mamba"
     
     # 形状参数
     in_shape: Tuple[int, int, int, int] = (10, 31, 256, 256)

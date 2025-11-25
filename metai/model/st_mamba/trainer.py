@@ -5,7 +5,7 @@ import os
 from typing import Dict, Any, Tuple, Optional
 from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from metai.model.core import get_optim_scheduler, timm_schedulers
-from .arch import MeteoMamba
+from .model import MeteoMamba
 from .loss import HybridLoss
 
 class MeteoMambaModule(l.LightningModule):

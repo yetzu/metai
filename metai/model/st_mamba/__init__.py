@@ -1,4 +1,4 @@
-from .arch import MeteoMamba
+from .model import MeteoMamba
 from .config import MeteoMambaConfig
 from .trainer import MeteoMambaModule
 
