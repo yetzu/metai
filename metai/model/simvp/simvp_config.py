@@ -65,7 +65,7 @@ class SimVPConfig(BaseModel):
     hid_T: int = Field(default=512, description="时序转换器隐藏层通道数")
     N_S: int = Field(default=4, description="空间编码器层数")
     N_T: int = Field(default=12, description="时序转换器层数") # 增加层数以捕捉长时依赖
-    model_type: str = Field(default='mamba', description="时序模块类型")
+    model_type: str = Field(default='video_mamba', description="时序模块类型")
     mlp_ratio: float = Field(default=8.0, description="MLP 扩展比例")
     drop: float = Field(default=0.0, description="Dropout 比率")
     drop_path: float = Field(default=0.1, description="Drop Path 比率")

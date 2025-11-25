@@ -54,7 +54,7 @@ case $MODE in
             --min_lr 1e-5 \
             --warmup_epoch 5 \
             \
-            --model_type mamba \
+            --model_type video_mamba \
             --hid_S 128 \
             --hid_T 512 \
             --N_S 4 \
@@ -79,7 +79,7 @@ case $MODE in
     # ============================================================
     "test")
         echo "----------------------------------------"
-        echo "🧪 开始测试 SimVP 基座模型..."
+        echo "🧪 开始测试 Mamba 基座模型..."
         echo "----------------------------------------"
         
         python run/test_scwds_simvp.py \
@@ -145,7 +145,7 @@ case $MODE in
 
     "infer")
         echo "----------------------------------------"
-        echo "🔮 开始推理 SimVP 模型..."
+        echo "🔮 开始推理 Mamba 模型..."
         echo "----------------------------------------"
         
         python run/infer_scwds_simvp.py \

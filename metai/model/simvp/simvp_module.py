@@ -585,11 +585,8 @@ class TAUSubBlock(GASubBlock):
         
         self.attn = TemporalAttention(dim, kernel_size)
 
-# ============================================================
-# [Corrected] metai/model/simvp/simvp_module.py (End of file)
-# ============================================================
 
-# 尝试导入 Mamba
+# --- 尝试导入 Mamba (如果环境没有安装，提供报错提示) ---
 try:
     from mamba_ssm import Mamba
     MAMBA_AVAILABLE = True
@@ -598,7 +595,157 @@ except ImportError:
     class Mamba(nn.Module):
         def __init__(self, *args, **kwargs):
             super().__init__()
-            raise ImportError("Please install 'mamba_ssm' (pip install mamba-ssm) to use Mamba models.")
+            raise ImportError("Please install 'mamba_ssm' (pip install mamba-ssm) to use VideoMamba.")
+
+# ==========================================
+# [NEW] Time-Aware Skip Connection Block
+# ==========================================
+class TimeAwareSkipBlock(nn.Module):
+    """
+    时序感知 Skip Connection 适配器
+    功能: 将 T_in 帧的浅层特征映射为 T_out 帧，解决时空错位问题。
+    原理: 使用 Linear 层在时间维度 (Time Axis) 上进行混合投影。
+    """
+    def __init__(self, t_in, t_out, dim):
+        super().__init__()
+        self.t_in = t_in
+        self.t_out = t_out
+        self.dim = dim
+        
+        # 线性投影: 学习时间步之间的演变关系
+        self.time_proj = nn.Linear(t_in, t_out)
+        self.norm = nn.LayerNorm(dim) # 稳定特征分布
+        
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x):
+        # 输入 x: [B, T_in, C, H, W]
+        # 我们需要将 Linear 作用于 T 维度
+        # Permute -> [B, C, H, W, T_in]
+        x = x.permute(0, 2, 3, 4, 1).contiguous()
+        
+        # Project: T_in -> T_out
+        x_out = self.time_proj(x) # [B, C, H, W, T_out]
+        
+        # Restore -> [B, T_out, C, H, W]
+        x_out = x_out.permute(0, 4, 1, 2, 3).contiguous()
+        
+        # Optional: Apply Norm per frame (flatten spatial first)
+        B, T, C, H, W = x_out.shape
+        x_out = x_out.view(B, T, C, -1).permute(0, 1, 3, 2) # [B, T, HW, C]
+        x_out = self.norm(x_out)
+        x_out = x_out.permute(0, 1, 3, 2).view(B, T, C, H, W)
+        
+        return x_out
+
+# ==========================================
+# [NEW] VideoMamba Block (Spatial + Temporal)
+# ==========================================
+class VideoMambaSubBlock(nn.Module):
+    """
+    [SOTA] VideoMamba Block
+    结合 SS2D (空间扫描) 和 Temporal Scan (时间扫描) 的双分支结构。
+    """
+    def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, **kwargs):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+        
+        # Mamba 基础配置
+        mamba_cfg = dict(
+            d_model=dim,
+            d_state=16,
+            d_conv=4,
+            expand=2,
+        )
+        
+        # 分支 1: 空间扫描 (SS2D - Spatial Spectral 2D Scanning)
+        self.mamba_spatial = Mamba(**mamba_cfg)
+        
+        # 分支 2: 时间扫描 (Temporal Scanning)
+        self.mamba_temporal = Mamba(**mamba_cfg)
+        
+        # 融合门控机制
+        self.fusion_gate = nn.Linear(dim * 2, dim)
+        
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.norm2 = nn.LayerNorm(dim)
+        
+        # Token Space MLP
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, mlp_hidden_dim),
+            act_layer(),
+            nn.Dropout(drop),
+            nn.Linear(mlp_hidden_dim, dim),
+            nn.Dropout(drop)
+        )
+        
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x_in):
+        # VideoMamba 模式要求输入为 5D: [B, T, C, H, W]
+        # 为了兼容性，如果输入是 4D，回退到纯空间模式
+        if x_in.dim() == 4: 
+            return self._forward_spatial_only(x_in)
+
+        B, T, C, H, W = x_in.shape
+        N = H * W
+        
+        # 转换到 Token 空间: [B, T, N, C]
+        x = x_in.permute(0, 1, 3, 4, 2).reshape(B, T, N, C)
+        shortcut = x
+        x = self.norm1(x)
+        
+        # --- Branch 1: Spatial Scanning (处理空间依赖) ---
+        # 将 Time 轴合并到 Batch: [B*T, N, C]
+        x_spatial = x.reshape(B*T, N, C)
+        out_spatial = self.mamba_spatial(x_spatial).reshape(B, T, N, C)
+        
+        # --- Branch 2: Temporal Scanning (处理长期演变) ---
+        # 将 Space 轴合并到 Batch: [B*N, T, C]
+        # 这让 Mamba 沿着 Time 轴扫描
+        x_temporal = x.permute(0, 2, 1, 3).reshape(B*N, T, C)
+        out_temporal = self.mamba_temporal(x_temporal).reshape(B, N, T, C).permute(0, 2, 1, 3)
+        
+        # --- Fusion ---
+        fused = torch.cat([out_spatial, out_temporal], dim=-1) # [B, T, N, 2C]
+        x = self.fusion_gate(fused) # [B, T, N, C]
+        
+        # Residual 1
+        x = shortcut + self.drop_path(x)
+        
+        # --- MLP ---
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        
+        # Restore 5D: [B, T, C, H, W]
+        return x.reshape(B, T, H, W, C).permute(0, 1, 4, 2, 3)
+
+    def _forward_spatial_only(self, x_in):
+        """兼容旧版 4D 输入的纯空间模式"""
+        B, C, H, W = x_in.shape
+        x = x_in.permute(0, 2, 3, 1).reshape(B, H*W, C)
+        res = self.drop_path(self.mamba_spatial(x))
+        x = x + res
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        return x.reshape(B, H, W, C).permute(0, 3, 1, 2)
 
 
 class TokenSpaceMLP(nn.Module):
