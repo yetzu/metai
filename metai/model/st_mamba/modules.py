@@ -56,12 +56,11 @@ class ConvSC(nn.Module):
         return self.conv(x)
 
 # ==========================================
-# 2. 高级组件 (SOTA Optimizations)
+# 2. SOTA 组件 (TokenSpaceMLP & AdaptiveGate)
 # ==========================================
 class TokenSpaceMLP(nn.Module):
     """
-    [Optimization] Token Space MLP
-    直接在 Token 维度 [B, L, C] 操作，避免频繁的 permute/reshape。
+    Token Space MLP: 直接在 Token 维度 [B, L, C] 操作，避免 Reshape 开销
     """
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
@@ -79,17 +78,11 @@ class TokenSpaceMLP(nn.Module):
             if m.bias is not None: nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
-        return x
+        return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
 
 class AdaptiveFusionGate(nn.Module):
     """
-    [Optimization] Adaptive Fusion Gate
-    基于上下文内容，动态学习空间特征与时间特征的融合权重。
+    Adaptive Fusion Gate: 动态学习空间与时间分支的融合权重
     """
     def __init__(self, dim, reduction=4):
         super().__init__()
@@ -108,19 +101,17 @@ class AdaptiveFusionGate(nn.Module):
             if m.bias is not None: nn.init.constant_(m.bias, 0)
         
     def forward(self, x_spatial, x_temporal):
-        # x: [B, L, C]
         # Global Context: Average over tokens
         combined = (x_spatial + x_temporal) / 2.0
         context = combined.mean(dim=1) # [B, C]
-        
         gate = self.gate_net(context).unsqueeze(1) # [B, 1, C]
         return gate * x_spatial + (1 - gate) * x_temporal
 
 # ==========================================
-# 3. 核心模块 (Core Blocks)
+# 3. 核心模块 (TimeAlign & STMamba)
 # ==========================================
 class TimeAlignBlock(nn.Module):
-    """时序对齐模块：T_in -> T_out 投影"""
+    """时序对齐模块：将 T_in 帧特征线性投影到 T_out 帧"""
     def __init__(self, t_in, t_out, dim):
         super().__init__()
         self.time_proj = nn.Linear(t_in, t_out)
@@ -130,9 +121,9 @@ class TimeAlignBlock(nn.Module):
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             nn.init.normal_(m.weight, mean=0.0, std=0.01)
+            # Init: Future is mostly copy of last frame (Identity-like)
             with torch.no_grad():
                 if m.weight.shape[1] > 0:
-                    # Init: Future is copy of last frame
                     m.weight[:, -1].fill_(1.0)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
@@ -140,7 +131,7 @@ class TimeAlignBlock(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x):
-        # x: [B, T_in, C, H, W]
+        # x: [B, T_in, C, H, W] -> [B, C, H, W, T_in]
         x = x.permute(0, 2, 3, 4, 1).contiguous() 
         x = self.time_proj(x) 
         x = x.permute(0, 4, 1, 2, 3).contiguous()
@@ -154,11 +145,8 @@ class TimeAlignBlock(nn.Module):
 
 class STMambaBlock(nn.Module):
     """
-    Spatiotemporal Mamba Block
-    Features:
-    1. Bidirectional Scanning (Fwd + Bwd) for both Spatial and Temporal branches.
-    2. Adaptive Fusion Gate.
-    3. TokenSpaceMLP.
+    [SOTA] Spatiotemporal Mamba Block (Bidirectional)
+    结合双向空间扫描 (Spatial) 和 双向时间扫描 (Temporal) + 自适应融合。
     """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU):
         super().__init__()
@@ -166,21 +154,21 @@ class STMambaBlock(nn.Module):
         
         mamba_cfg = dict(d_model=dim, d_state=16, d_conv=4, expand=2)
         
-        # Branch 1: Spatial (SS2D-like)
+        # Branch 1: Spatial
         self.scan_spatial = Mamba(**mamba_cfg)
         
         # Branch 2: Temporal
         self.scan_temporal = Mamba(**mamba_cfg)
         
-        # SOTA: Adaptive Gate
+        # Adaptive Gate
         self.fusion_gate = AdaptiveFusionGate(dim)
         
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = nn.LayerNorm(dim)
         
-        # SOTA: Token Space MLP
+        # Token Space MLP
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = TokenSpaceMLP(dim, mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = TokenSpaceMLP(dim, mlp_hidden_dim, dim, act_layer=act_layer, drop=drop)
         
         self.apply(self._init_weights)
 
@@ -202,18 +190,16 @@ class STMambaBlock(nn.Module):
         shortcut = x.reshape(B, T*N, C)
         x = self.norm1(x) # [B, T, N, C]
         
-        # --- Branch 1: Spatial Scanning ---
+        # --- Branch 1: Spatial Scanning (Bidirectional) ---
         # Reshape: [B*T, N, C]
         x_s = x.reshape(B*T, N, C)
-        # Bidirectional: Fwd + Bwd
         out_s_fwd = self.scan_spatial(x_s)
         out_s_bwd = self.scan_spatial(x_s.flip([1])).flip([1])
         out_s = (out_s_fwd + out_s_bwd).reshape(B, T*N, C)
         
-        # --- Branch 2: Temporal Scanning ---
+        # --- Branch 2: Temporal Scanning (Bidirectional) ---
         # Reshape: [B*N, T, C]
         x_t = x.permute(0, 2, 1, 3).reshape(B*N, T, C)
-        # Bidirectional: Fwd + Bwd
         out_t_fwd = self.scan_temporal(x_t)
         out_t_bwd = self.scan_temporal(x_t.flip([1])).flip([1])
         out_t = (out_t_fwd + out_t_bwd).reshape(B, N, T, C).permute(0, 2, 1, 3).reshape(B, T*N, C)

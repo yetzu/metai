@@ -73,6 +73,7 @@ class MeteoMamba(nn.Module):
         self.enc = FeatureEncoder(C, hid_S, N_S, spatio_kernel_enc)
         self.evolution = EvolutionNet(hid_S, hid_T, N_T, drop=0.0, drop_path=0.1)
         self.latent_time_proj = nn.Linear(T_in, self.T_out)
+        # [CRITICAL FIX] Ensure decoder output channels matches prediction target (1)
         self.dec = FeatureDecoder(hid_S, self.out_channels, N_S, spatio_kernel_dec)
         self.skip_proj = TimeAlignBlock(T_in, self.T_out, hid_S)
         self._init_time_proj()
