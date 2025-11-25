@@ -41,32 +41,30 @@ case $MODE in
             --data_path data/samples.jsonl \
             --save_dir ./output/simvp \
             --ckpt_path ./output/simvp/periodic-epoch=19.ckpt \
-            --batch_size 4 \
-            --accumulate_grad_batches 2 \
+            --batch_size 2 \
+            --accumulate_grad_batches 4 \
             --num_workers 4 \
             \
             --in_shape 10 54 256 256 \
             --aft_seq_length 20 \
             --max_epochs 100 \
             --opt adamw \
-            --lr 1e-4 \
+            --lr 5e-4 \
             --sched cosine \
             --min_lr 1e-5 \
             --warmup_epoch 5 \
             \
             --model_type video_mamba \
-            --hid_S 128 \
-            --hid_T 512 \
+            --hid_S 64 \
+            --hid_T 256 \
             --N_S 4 \
-            --N_T 12 \
+            --N_T 8 \
             --mlp_ratio 8.0 \
             --drop 0.0 \
-            --drop_path 0.1 \
-            --spatio_kernel_enc 5 \
-            --spatio_kernel_dec 5 \
+            --drop_path 0.2 \
             \
             --use_curriculum_learning true \
-            --early_stop_patience 50 \
+            --early_stop_patience 30 \
             --accelerator cuda \
             --devices 0,1,2,3 \
             --precision bf16-mixed \
