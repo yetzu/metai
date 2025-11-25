@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lightning.pytorch.cli import LightningCLI
 from metai.dataset.met_dataloader_scwds import ScwdsDataModule
-from metai.model.st_mamba import MeteoMambaModule
+from metai.model.met_mamba import MeteoMambaModule
 
 def main():
     torch.set_float32_matmul_precision('high')

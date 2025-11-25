@@ -23,15 +23,26 @@ class Encoder(nn.Module):
             nn.SiLU(inplace=True)
         )
         
+        # ============================================================
+        # [Optimization] 3D Stem 初始化
+        # 3D 卷积参数量大，默认均匀分布初始化可能导致训练初期梯度不稳定。
+        # 使用 Kaiming Normal (He initialization) 适配 SiLU/ReLU 激活。
+        # ============================================================
+        for m in self.stem.modules():
+            if isinstance(m, nn.Conv3d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+        
         samplings = sampling_generator(N_S)
         self.enc = nn.Sequential(
-            # [修改] 第一层 ConvSC 的输入通道变为 C_hid (因为 Stem 已经将通道数映射到了 C_hid)
+            # [修改] 第一层 ConvSC 的输入通道变为 C_hid
             ConvSC(C_hid, C_hid, spatio_kernel, downsampling=samplings[0]),
             *[ConvSC(C_hid, C_hid, spatio_kernel, downsampling=s) for s in samplings[1:]]
         )
 
     def forward(self, x):
-        # [修改] 输入 x 此时为 5D 张量: [B, T, C, H, W]
+        # x: [B, T, C, H, W]
         B, T, C, H, W = x.shape
         
         # 1. 3D Stem 处理
@@ -45,7 +56,7 @@ class Encoder(nn.Module):
         x = x.permute(0, 2, 1, 3, 4).contiguous()
         x = x.view(B * T, -1, H, W)
         
-        # 3. 后续 2D ConvSC 处理保持不变
+        # 3. 后续 2D ConvSC 处理
         enc1 = self.enc[0](x)
         latent = enc1
         for i in range(1, len(self.enc)):

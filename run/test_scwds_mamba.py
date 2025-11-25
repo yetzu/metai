@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 matplotlib.use('Agg')
 
 from metai.dataset.met_dataloader_scwds import ScwdsDataModule
-from metai.model.st_mamba import MeteoMambaModule
+from metai.model.met_mamba import MeteoMambaModule
 
 class TeeLogger:
     def __init__(self, log_file_path):

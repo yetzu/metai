@@ -39,4 +39,4 @@ tensorboard --logdir ./output/simvp
 watch -n 1 nvidia-smi
 /home/dataset-assist-0/code/submit/output/CP2025000081.zip
 
-nohup bash run.scwds.simvp.sh train > train_log.txt 2>&1 &
+nohup bash run.scwds.mamba.sh train > train_log.txt 2>&1 &

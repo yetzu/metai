@@ -6,7 +6,7 @@
 
 # ================= 环境变量优化 =================
 export PYTHONPATH=$PYTHONPATH:$(pwd)
-export PYTORCH_ALLOC_CONF=expandable_segments:True
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_P2P_DISABLE=0
 export NCCL_IB_DISABLE=0
 export NCCL_DEBUG=WARN

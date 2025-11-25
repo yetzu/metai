@@ -29,7 +29,7 @@ class MeteoMambaConfig(BaseModel):
     min_lr: float = 1e-5
     warmup_lr: float = 1e-5
     warmup_epoch: int = 5
-    weight_decay: float = 0.05
+    weight_decay: float = 0.01
     momentum: float = 0.9
     sched: str = "cosine"
     decay_epoch: int = 30      # Step Decay 的间隔

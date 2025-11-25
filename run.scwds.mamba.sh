@@ -6,7 +6,7 @@
 
 # ================= 环境变量优化 =================
 export PYTHONPATH=$PYTHONPATH:$(pwd)
-export PYTORCH_ALLOC_CONF=expandable_segments:True
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export NCCL_P2P_DISABLE=0
 export NCCL_IB_DISABLE=0
 export NCCL_DEBUG=WARN
@@ -24,9 +24,7 @@ fi
 MODE=$1
 
 # ================= 配置参数 =================
-# 显卡设置
 DEVICES="[0,1,2,3]"
-# 基础路径
 DATA_PATH="data/samples.jsonl"
 SAVE_DIR="./output/meteo_mamba"
 
@@ -36,15 +34,16 @@ case $MODE in
     # ============================================================
     "train")
         echo "--------------------------------------------------------"
-        echo "🚀 [4x A800] 开始训练 MeteoMamba 模型 (BF16 Mixed)..."
+        echo "🚀 [4x A800] 开始训练 MeteoMamba (Monitor: val_score)..."
         echo "--------------------------------------------------------"
         
-        # 注意：新的 train_scwds_mamba.py 使用 LightningCLI
-        # 参数格式为 --section.arg value
+        # [核心修改]
+        # 1. 添加 ModelCheckpoint: 监控 val_score (max), 保存 Top-3
+        # 2. 添加 EarlyStopping: 监控 val_score (max), Patience=30
+        # 3. 显式指定完整类名以通过 CLI 加载
         
         python run/train_scwds_mamba.py fit \
             --seed_everything 42 \
-            \
             --trainer.default_root_dir $SAVE_DIR \
             --trainer.accelerator gpu \
             --trainer.devices $DEVICES \
@@ -52,14 +51,26 @@ case $MODE in
             --trainer.precision bf16-mixed \
             --trainer.max_epochs 50 \
             --trainer.gradient_clip_val 0.5 \
-            --trainer.accumulate_grad_batches 4 \
+            --trainer.accumulate_grad_batches 8 \
             --trainer.log_every_n_steps 10 \
-            
+            \
+            --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
+            --trainer.callbacks.monitor "val_score" \
+            --trainer.callbacks.mode "max" \
+            --trainer.callbacks.save_top_k 3 \
+            --trainer.callbacks.save_last true \
+            --trainer.callbacks.filename "{epoch:02d}-{val_score:.4f}" \
+            \
+            --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
+            --trainer.callbacks.monitor "val_score" \
+            --trainer.callbacks.mode "max" \
+            --trainer.callbacks.patience 30 \
+            --trainer.callbacks.min_delta 0.0 \
             \
             --model.in_shape "[10, 31, 256, 256]" \
             --model.aft_seq_length 20 \
-            --model.hid_S 128 \
-            --model.hid_T 512 \
+            --model.hid_S 64 \
+            --model.hid_T 256 \
             --model.N_S 4 \
             --model.N_T 8 \
             --model.lr 1e-3 \
@@ -68,9 +79,8 @@ case $MODE in
             --model.use_curriculum_learning true \
             \
             --data.data_path $DATA_PATH \
-            --data.batch_size 4 \
-            --data.num_workers 8 \
-            --data.resize_shape "[256, 256]"
+            --data.batch_size 2 \
+            --data.num_workers 16
         ;;
         
     # ============================================================
@@ -81,11 +91,11 @@ case $MODE in
         echo "🧪 开始测试 MeteoMamba 模型..."
         echo "----------------------------------------"
         
-        # 自动查找最佳 Checkpoint (如果 best 不存在则找 last)
-        CKPT_PATH=$(find $SAVE_DIR -name "*.ckpt" | grep "last.ckpt" | head -n 1)
+        # 这里优先使用 'last.ckpt' 继续训练或测试，或者手动指定最佳权重
+        CKPT_PATH=$(find $SAVE_DIR -name "*val_score*.ckpt" | sort -V | tail -n 1)
+        
         if [ -z "$CKPT_PATH" ]; then
-             # 尝试找 best
-             CKPT_PATH=$(find $SAVE_DIR -name "*.ckpt" | grep "epoch=" | sort -V | tail -n 1)
+             CKPT_PATH=$(find $SAVE_DIR -name "last.ckpt" | head -n 1)
         fi
         
         if [ -z "$CKPT_PATH" ]; then
@@ -99,20 +109,10 @@ case $MODE in
             --trainer.accelerator gpu \
             --trainer.devices 1 \
             --trainer.precision bf16-mixed \
-            \
             --ckpt_path "$CKPT_PATH" \
-            \
-            --model.in_shape "[10, 31, 256, 256]" \
-            --model.aft_seq_length 20 \
-            --model.hid_S 64 \
-            --model.hid_T 256 \
-            --model.N_S 4 \
-            --model.N_T 8 \
-            \
             --data.data_path $DATA_PATH \
             --data.batch_size 1 \
-            --data.num_workers 4 \
-            --data.resize_shape "[256, 256]"
+            --data.num_workers 4
         ;;
         
     *)
