@@ -17,7 +17,6 @@ class FeatureEncoder(nn.Module):
         )
 
     def forward(self, x):
-        # x: [B*T, C, H, W]
         enc1 = self.enc[0](x)
         latent = enc1
         for i in range(1, len(self.enc)):
@@ -45,26 +44,19 @@ class EvolutionNet(nn.Module):
         super().__init__()
         self.proj_in = nn.Linear(dim_in, dim_hid)
         self.proj_out = nn.Linear(dim_hid, dim_in)
-        
         dpr = [x.item() for x in torch.linspace(1e-2, drop_path, num_layers)]
         self.layers = nn.ModuleList([
-            STMambaBlock(dim_hid, drop=drop, drop_path=dpr[i]) 
-            for i in range(num_layers)
+            STMambaBlock(dim_hid, drop=drop, drop_path=dpr[i]) for i in range(num_layers)
         ])
 
     def forward(self, x):
-        # x: [B, T, C, H, W]
         x = x.permute(0, 1, 3, 4, 2).contiguous()
-        x = self.proj_in(x) # Project Channel
-        
-        # [B, T, H, W, C_hid] -> STMambaBlock expects [B, T, C, H, W]
+        x = self.proj_in(x)
         x = x.permute(0, 1, 4, 2, 3).contiguous()
-        
         for layer in self.layers:
             x = layer(x)
-            
         x = x.permute(0, 1, 3, 4, 2).contiguous()
-        x = self.proj_out(x) # Project Back
+        x = self.proj_out(x)
         x = x.permute(0, 1, 4, 2, 3).contiguous()
         return x
 
@@ -73,27 +65,16 @@ class MeteoMamba(nn.Module):
                  spatio_kernel_enc=3, spatio_kernel_dec=3, 
                  out_channels=None, aft_seq_length=20, **kwargs):
         super().__init__()
-        
         T_in, C, H, W = in_shape
         self.T_out = aft_seq_length
         if out_channels is None: out_channels = C
         self.out_channels = out_channels
         
-        # 1. Encoder
         self.enc = FeatureEncoder(C, hid_S, N_S, spatio_kernel_enc)
-        
-        # 2. Evolution
         self.evolution = EvolutionNet(hid_S, hid_T, N_T, drop=0.0, drop_path=0.1)
-        
-        # 3. Temporal Extrapolation
         self.latent_time_proj = nn.Linear(T_in, self.T_out)
-        
-        # 4. Decoder (Corrected: output channels should be self.out_channels)
         self.dec = FeatureDecoder(hid_S, self.out_channels, N_S, spatio_kernel_dec)
-        
-        # 5. Skip Connection Extrapolation
         self.skip_proj = TimeAlignBlock(T_in, self.T_out, hid_S)
-        
         self._init_time_proj()
 
     def _init_time_proj(self):
@@ -104,30 +85,23 @@ class MeteoMamba(nn.Module):
         nn.init.constant_(self.latent_time_proj.bias, 0)
 
     def forward(self, x_raw):
-        # x_raw: [B, T_in, C, H, W]
         B, T_in, C_in, H, W = x_raw.shape
         x = x_raw.view(B*T_in, C_in, H, W)
-
-        # Encode
         embed, skip = self.enc(x)
         _, C_hid, H_, W_ = embed.shape 
         
-        # Evolve & Extrapolate
         z = embed.view(B, T_in, C_hid, H_, W_)
-        z = self.evolution(z) # [B, T_in, C_hid, H', W']
+        z = self.evolution(z)
         
-        # Temporal Project
-        z = z.permute(0, 2, 3, 4, 1) # [B, C, H, W, T_in]
-        z = self.latent_time_proj(z) # [B, C, H, W, T_out]
-        z = z.permute(0, 4, 1, 2, 3).contiguous() 
+        z = z.permute(0, 2, 3, 4, 1) 
+        z = self.latent_time_proj(z) 
+        z = z.permute(0, 4, 1, 2, 3).contiguous()
         z = z.view(B * self.T_out, C_hid, H_, W_)
         
-        # Skip Connection
         skip = skip.view(B, T_in, C_hid, H, W)
         skip_out = self.skip_proj(skip)
         skip_out = skip_out.view(B * self.T_out, C_hid, H, W)
         
-        # Decode
         Y = self.dec(z, skip_out)
         Y = Y.reshape(B, self.T_out, self.out_channels, H, W)
         return Y
