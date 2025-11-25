@@ -15,7 +15,7 @@ class MeteoMambaModule(l.LightningModule):
         N_S: int = 4,
         N_T: int = 8,
         aft_seq_length: int = 20,
-        # 优化器参数
+        # 优化器参数 (参数化，对应 config.py)
         lr: float = 5e-4,
         min_lr: float = 1e-5,
         warmup_lr: float = 1e-5,
@@ -25,8 +25,17 @@ class MeteoMambaModule(l.LightningModule):
         opt: str = 'adamw',
         sched: str = 'cosine',
         max_epochs: int = 100,
+        decay_epoch: int = 30,
+        decay_rate: float = 0.1,
         # 策略参数
         use_curriculum_learning: bool = True,
+        # 损失权重参数
+        loss_weight_l1: float = 1.0,
+        loss_weight_ssim: float = 0.5,
+        loss_weight_csi: float = 1.0,
+        loss_weight_spectral: float = 0.1,
+        loss_weight_evo: float = 0.5,
+        loss_weight_focal: float = 0.0,
         **kwargs 
     ):
         super().__init__()
@@ -39,36 +48,35 @@ class MeteoMambaModule(l.LightningModule):
             N_S=N_S,
             N_T=N_T,
             aft_seq_length=aft_seq_length,
-            out_channels=1  # 强制单通道输出
+            out_channels=1
         )
         
+        # [Fix] 使用传入的参数初始化 Loss，而非硬编码
         self.criterion = HybridLoss(
-            l1_weight=10.0, 
-            ssim_weight=1.0,
-            csi_weight=0.0,
-            spectral_weight=0.0,
-            evo_weight=0.0
+            l1_weight=loss_weight_l1,
+            ssim_weight=loss_weight_ssim,
+            csi_weight=loss_weight_csi,
+            spectral_weight=loss_weight_spectral,
+            evo_weight=loss_weight_evo,
+            focal_weight=loss_weight_focal # [New]
         )
         
         self.resize_shape = (in_shape[2], in_shape[3])
 
     def configure_optimizers(self):
-        class Args:
-            def __init__(self, hparams):
-                self.opt = hparams.opt
-                self.lr = hparams.lr
-                self.weight_decay = hparams.weight_decay
-                self.momentum = hparams.momentum
-                self.filter_bias_and_bn = True
-                self.sched = hparams.sched
-                self.min_lr = hparams.min_lr
-                self.warmup_lr = hparams.warmup_lr
-                self.warmup_epoch = hparams.warmup_epoch
-                self.decay_epoch = 30
-                self.decay_rate = 0.1
+        # [Fix] 移除硬编码的 Args 类，直接使用 self.hparams (它包含了 __init__ 中的所有参数)
+        # self.hparams 还会自动包含 config.py 中定义的额外参数
+        
+        # 确保 hparams 中包含 filter_bias_and_bn 标志
+        if not hasattr(self.hparams, 'filter_bias_and_bn'):
+             self.hparams.filter_bias_and_bn = True
 
-        args = Args(self.hparams)
-        optimizer, scheduler, by_epoch = get_optim_scheduler(args, self.hparams.max_epochs, self.model)
+        optimizer, scheduler, by_epoch = get_optim_scheduler(
+            self.hparams, 
+            self.hparams.max_epochs, 
+            self.model
+        )
+        
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
@@ -84,24 +92,30 @@ class MeteoMambaModule(l.LightningModule):
             scheduler.step(metric) if metric is not None else scheduler.step()
 
     def on_train_epoch_start(self):
+        """
+        Curriculum Learning 策略调整
+        策略：
+        - Phase 1 (Structure): L1 主导，Focal=0，快速收敛形状。
+        - Phase 2 (Physics): 引入 Focal 和 Evo，开始关注强回波和物理演变。
+        - Phase 3 (Metric): Focal + CSI 主导，攻坚强降水极值，并冻结 Encoder。
+        """
+        if not self.hparams.use_curriculum_learning:
+            return
+
         epoch = self.current_epoch
         max_epochs = self.hparams.max_epochs
         
-        # 阶段定义
-        phase_1_end = int(0.1 * max_epochs) # Structure (0-10%)
-        phase_2_end = int(0.4 * max_epochs) # Physics Warmup (10-40%)
+        phase_1_end = int(0.1 * max_epochs) # 0-10%
+        phase_2_end = int(0.4 * max_epochs) # 10-40%
         
         weights = {}
-        phase_name = ""
         
         if epoch < phase_1_end:
-            # Phase 1: 强结构约束
-            # 初始阶段主要靠 L1 快速收敛结构
+            # Phase 1: Structure
             weights = {'l1': 10.0, 'ssim': 1.0, 'evo': 0.0, 'spec': 0.0, 'csi': 0.0, 'focal': 0.0}
-            phase_name = "Structure"
             
         elif epoch < phase_2_end:
-            # Phase 2: 物理预热 (逐步引入 Focal Loss 替换部分 L1)
+            # Phase 2: Physics Warmup
             p = (epoch - phase_1_end) / (phase_2_end - phase_1_end)
             weights = {
                 'l1': 10.0 - p * 5.0,   # L1 降低
@@ -109,29 +123,26 @@ class MeteoMambaModule(l.LightningModule):
                 'evo': p * 0.1,
                 'spec': p * 0.05,
                 'csi': p * 0.5,
-                'focal': p * 5.0        # [新增] Focal 权重逐渐增加，接管部分 L1 功能
+                'focal': p * 5.0        # [New] Focal 线性预热到 5.0
             }
-            phase_name = "Physics Warmup"
             
         else:
-            # Phase 3: 指标冲刺 (Metric Sprint)
+            # Phase 3: Metric Sprint
             p = (epoch - phase_2_end) / (max_epochs - phase_2_end)
             weights = {
                 'l1': 5.0 - p * 4.0,    # L1 进一步降低
                 'ssim': 1.0 - p * 0.5,
                 'evo': 0.1 + p * 0.4,
                 'spec': 0.05 + p * 0.15,
-                'csi': 0.5 + (5.0 - 0.5) * (p**2), # CSI 主导
-                'focal': 5.0 + p * 5.0  # [新增] Focal 继续增加，强化稀疏区预测
+                'csi': 0.5 + (5.0 - 0.5) * (p**2),
+                'focal': 5.0 + p * 5.0  # [New] Focal 继续增加到 10.0
             }
-            phase_name = "Metric Sprint"
 
-            # [关键操作] 冻结 Encoder (仅执行一次)
+            # 冻结 Encoder
             if not getattr(self, 'encoder_frozen', False):
-                print(f"\n[Curriculum] Epoch {epoch}: Phase 3 Start. Freezing Spatial Encoder to preserve features.")
-                # 冻结 SimVP/Mamba 的 Encoder 部分
+                print(f"\n[Curriculum] Epoch {epoch}: Phase 3 Start. Freezing Encoder.")
                 if hasattr(self.model, 'enc'):
-                    self.model.enc.eval() # 设置为 eval 模式 (影响 BN/Dropout)
+                    self.model.enc.eval()
                     for param in self.model.enc.parameters():
                         param.requires_grad = False
                 self.encoder_frozen = True
@@ -145,16 +156,11 @@ class MeteoMambaModule(l.LightningModule):
             self.log(f"train/weight_{k}", v, on_epoch=True, sync_dist=True)
 
     def _interpolate_batch(self, batch_tensor: torch.Tensor, mode: str = 'max_pool') -> torch.Tensor:
-        """
-        [Strictly aligned with SimVP logic]
-        处理 (B, T, C, H, W) 格式的 Tensor 插值
-        """
         if self.resize_shape is None: return batch_tensor
         T, C, H, W = batch_tensor.shape[1:]
         target_H, target_W = self.resize_shape
         if H == target_H and W == target_W: return batch_tensor
         
-        # Handle bool masks
         is_bool = batch_tensor.dtype == torch.bool
         if is_bool: batch_tensor = batch_tensor.float()
         
@@ -162,7 +168,6 @@ class MeteoMambaModule(l.LightningModule):
         batch_tensor = batch_tensor.view(B * T, C, H, W)
         
         if mode == 'max_pool':
-            # 如果是降采样，优先使用 max_pool 保留极值（如强降水中心）
             if target_H < H or target_W < W:
                 processed_tensor = F.adaptive_max_pool2d(batch_tensor, output_size=self.resize_shape)
             else:
@@ -179,7 +184,6 @@ class MeteoMambaModule(l.LightningModule):
 
     def training_step(self, batch, batch_idx):
         _, x, y, mask, _ = batch
-        # 对齐 SimVP: 数据使用 max_pool 保留特征，Mask 使用 nearest 防止插值产生小数
         x = self._interpolate_batch(x, mode='max_pool')
         y = self._interpolate_batch(y, mode='max_pool')
         mask = self._interpolate_batch(mask, mode='nearest')
@@ -204,11 +208,9 @@ class MeteoMambaModule(l.LightningModule):
         pred = torch.sigmoid(logits)
         y_pred_clamped = torch.clamp(pred, 0.0, 1.0)
         
-        # Ensure 4D for metric calculation: [B, T, H, W]
         if y_pred_clamped.dim() == 5: y_pred_clamped = y_pred_clamped.squeeze(2)
         if y.dim() == 5: y = y.squeeze(2)
 
-        # [Strictly aligned with SimVP metrics]
         mae = F.l1_loss(y_pred_clamped, y)
         
         MM_MAX = 30.0
