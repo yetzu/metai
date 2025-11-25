@@ -40,10 +40,9 @@ case $MODE in
         python run/train_scwds_simvp.py \
             --data_path data/samples.jsonl \
             --save_dir ./output/simvp \
-            --ckpt_path ./output/simvp/periodic-epoch=19.ckpt \
-            --batch_size 16 \
-            --accumulate_grad_batches 1 \
-            --num_workers 16 \
+            --batch_size 4 \
+            --accumulate_grad_batches 4 \
+            --num_workers 8 \
             \
             --in_shape 10 31 256 256 \
             --aft_seq_length 20 \
