@@ -16,9 +16,10 @@ class WeightedScoreSoftCSILoss(nn.Module):
     """
     基于竞赛评分规则的 Soft-CSI 损失函数，支持强度加权、时效加权和 Masking。
     """
-    def __init__(self, smooth=1.0):
+    def __init__(self, smooth=1.0, scale=20.0):
         super().__init__()
         self.MM_MAX = 30.0 
+        self.scale = scale
         
         # --- 1. 对齐强度分级及权重 ---
         thresholds_raw = [0.1, 1.0, 2.0, 5.0, 8.0]
@@ -60,7 +61,7 @@ class WeightedScoreSoftCSILoss(nn.Module):
             w = self.intensity_weights[i]
             
             # 1. 软二值化
-            pred_score = torch.sigmoid((pred - t) * 50)
+            pred_score = torch.sigmoid((pred - t) * self.scale)
             target_score = (target > t).float()
             
             # 关键修改：应用 Mask

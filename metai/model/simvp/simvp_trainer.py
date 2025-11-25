@@ -75,6 +75,8 @@ class SimVP(l.LightningModule):
         以确保在 Curriculum 的 Phase 3 (高 CSI 权重) 阶段，模型仍有足够的更新步长。
         """
         max_epochs = getattr(self.hparams, 'max_epochs', 100)
+        if self.hparams.min_lr < 1e-6:
+            self.hparams.min_lr = 1e-6
         optimizer, scheduler, by_epoch = get_optim_scheduler(self.hparams, max_epochs, self.model)
         
         return cast(OptimizerLRScheduler, {
