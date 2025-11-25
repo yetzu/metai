@@ -48,12 +48,13 @@ case $MODE in
             --trainer.default_root_dir $SAVE_DIR \
             --trainer.accelerator gpu \
             --trainer.devices $DEVICES \
-            --trainer.strategy ddp_find_unused_parameters_true \
+            --trainer.strategy ddp \
             --trainer.precision bf16-mixed \
             --trainer.max_epochs 50 \
             --trainer.gradient_clip_val 0.5 \
             --trainer.accumulate_grad_batches 4 \
             --trainer.log_every_n_steps 10 \
+            
             \
             --model.in_shape "[10, 31, 256, 256]" \
             --model.aft_seq_length 20 \
