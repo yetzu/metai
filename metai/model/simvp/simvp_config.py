@@ -98,7 +98,7 @@ class SimVPConfig(BaseModel):
     sched: str = Field(default="cosine", description="调度器")
     min_lr: float = Field(default=1e-5, description="最小学习率 (提高以支持 Phase 3)")
     warmup_lr: float = Field(default=1e-5, description="Warmup 初始学习率")
-    warmup_epoch: int = Field(default=5, description="Warmup Epoch 数")
+    warmup_epoch: int = Field(default=10, description="Warmup Epoch 数")
     decay_epoch: int = Field(default=30, description="Step Decay 的间隔")
     decay_rate: float = Field(default=0.1, description="Step Decay 的衰减率")
 

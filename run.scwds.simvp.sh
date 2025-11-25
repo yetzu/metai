@@ -41,11 +41,11 @@ case $MODE in
             --data_path data/samples.jsonl \
             --save_dir ./output/simvp \
             --ckpt_path ./output/simvp/periodic-epoch=19.ckpt \
-            --batch_size 2 \
+            --batch_size 4 \
             --accumulate_grad_batches 4 \
             --num_workers 4 \
             \
-            --in_shape 10 54 256 256 \
+            --in_shape 10 31 256 256 \
             --aft_seq_length 20 \
             --max_epochs 100 \
             --opt adamw \
@@ -82,7 +82,7 @@ case $MODE in
         
         python run/test_scwds_simvp.py \
             --data_path data/samples.jsonl \
-            --in_shape 10 54 256 256 \
+            --in_shape 10 31 256 256 \
             --aft_seq_length 20 \
             --save_dir ./output/simvp \
             --num_samples 10 \

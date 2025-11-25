@@ -9,11 +9,45 @@ import cv2
 from metai.utils import get_config
 from metai.utils import MetConfig, MetLabel, MetRadar, MetNwp, MetGis, MetVar
 
-# 默认通道列表常量 - 保持不变
+# 优化后的通道列表 (精简版)
 _DEFAULT_CHANNELS: List[Union[MetLabel, MetRadar, MetNwp, MetGis]] = [
-    MetLabel.RA, MetRadar.CR, MetRadar.CAP20, MetRadar.CAP30, MetRadar.CAP40, MetRadar.CAP50, MetRadar.CAP60, MetRadar.CAP70, MetRadar.ET, MetRadar.HBR, MetRadar.VIL,
-    MetNwp.WS925, MetNwp.WS700, MetNwp.WS500, MetNwp.Q1000, MetNwp.Q850, MetNwp.Q700, MetNwp.PWAT, MetNwp.PE, MetNwp.TdSfc850, MetNwp.LCL, MetNwp.KI, MetNwp.CAPE,
-    MetGis.LAT, MetGis.LON, MetGis.DEM, MetGis.MONTH_SIN, MetGis.MONTH_COS, MetGis.HOUR_SIN, MetGis.HOUR_COS
+    # --- 1. 标签 (1) ---
+    MetLabel.RA, 
+    
+    # --- 2. 雷达 (5个关键层) ---
+    MetRadar.CR, 
+    # MetRadar.CAP20, # 剔除
+    MetRadar.CAP30,   # 保留: 低空核心
+    # MetRadar.CAP40, # 剔除
+    MetRadar.CAP50,   # 保留: 中高空/0度层附近
+    # MetRadar.CAP60, # 剔除
+    # MetRadar.CAP70, # 剔除
+    MetRadar.ET,      # 保留: 对流高度
+    # MetRadar.HBR,   # 剔除: 通常与CR相关
+    MetRadar.VIL,     # 保留: 强天气指示
+    
+    # --- 3. NWP (6个关键变量) ---
+    MetNwp.WS925,     # 保留: 低空急流
+    MetNwp.WS500,     # 保留: 引导气流
+    # MetNwp.WS700,   # 剔除
+    
+    MetNwp.Q850,      # 保留: 低层水汽核心
+    MetNwp.Q700,      # 保留: 中层水汽
+    # MetNwp.Q1000,   # 剔除
+    
+    # 剔除所有 RH (与 Q 重复)
+    # MetNwp.RH1000, MetNwp.RH700, MetNwp.RH500,
+    
+    MetNwp.PWAT,      # 保留: 整层水汽
+    MetNwp.CAPE,      # 保留: 不稳定能量
+    
+    # 剔除次要指数
+    # MetNwp.PE, MetNwp.TdSfc850, MetNwp.LCL, MetNwp.KI,
+    
+    # --- 4. GIS (7个) ---
+    MetGis.LAT, MetGis.LON, MetGis.DEM, 
+    MetGis.MONTH_SIN, MetGis.MONTH_COS, 
+    MetGis.HOUR_SIN, MetGis.HOUR_COS
 ]
 
 

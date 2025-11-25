@@ -209,6 +209,14 @@ class SimVP_Model(nn.Module):
         self.readout = nn.Conv2d(hid_S, out_channels, kernel_size=1)
         nn.init.constant_(self.readout.bias, -5.0)
 
+        # [NEW] 针对时序投影层的特殊初始化
+        if self.latent_time_proj is not None:
+            # 初始化为：未来的特征 ≈ 过去最后一帧的特征
+            nn.init.normal_(self.latent_time_proj.weight, mean=0.0, std=0.01)
+            with torch.no_grad():
+                self.latent_time_proj.weight[:, -1].fill_(1.0)
+            nn.init.constant_(self.latent_time_proj.bias, 0)
+
     def forward(self, x_raw, **kwargs):
         # x_raw: [B, T_in, C_in, H, W]
         B, T_in, C_in, H, W = x_raw.shape

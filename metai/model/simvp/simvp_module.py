@@ -620,7 +620,16 @@ class TimeAwareSkipBlock(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
+            # [关键修改] 初始化为近似“复制最后一帧”的逻辑
+            # 也就是将权重集中在 T_in 的最后几个时间步
+            nn.init.normal_(m.weight, mean=0.0, std=0.01)
+            
+            # 手动设置：让每一帧输出主要依赖于输入的最后一帧 (T_in-1)
+            # 这相当于初始状态下，模型猜测未来 = 现在的延续
+            with torch.no_grad():
+                # 将最后一列（对应 T_in 的最后一帧）的权重设大
+                m.weight[:, -1].fill_(1.0) 
+                
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):

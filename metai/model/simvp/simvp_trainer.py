@@ -168,7 +168,7 @@ class SimVP(l.LightningModule):
             self.log(f"train/weight_{k}", v, on_epoch=True, sync_dist=True)
 
     def on_train_epoch_end(self):
-        """后台非阻塞式测试"""
+        """后台非阻塞式测试 (修复版：支持 last.ckpt 回退)"""
         if self.trainer.is_global_zero and self.auto_test_after_epoch:
             try:
                 if not self.test_script_path: return
@@ -192,38 +192,65 @@ class SimVP(l.LightningModule):
                 epoch = self.current_epoch
                 log_file = os.path.join(log_dir, f'test_epoch_{epoch:03d}.log')
                 
-                # 构造后台执行代码
+                # 构造后台执行代码 (增强版逻辑)
                 background_code = f"""
 import os, time, glob, subprocess, sys
+
 save_dir = r'{save_dir}'
 script_path = r'{script_path}'
 epoch = {epoch}
-max_wait = 600
+max_wait = 600  # 最大等待 10 分钟
 
 start_time = time.time()
-found = False
+found_specific = False
+
+# 1. 尝试轮询特定 Epoch 的文件 (epoch=XX)
 while time.time() - start_time < max_wait:
     files = glob.glob(os.path.join(save_dir, "*.ckpt"))
     target = [f for f in files if f"epoch={{epoch:02d}}" in f]
+    
     if target:
-        size1 = os.path.getsize(target[0])
-        time.sleep(2)
-        if os.path.getsize(target[0]) == size1 and size1 > 0:
-            found = True
-            break
+        # 检查文件是否写入完毕 (大小稳定)
+        try:
+            size1 = os.path.getsize(target[0])
+            time.sleep(2)
+            if os.path.getsize(target[0]) == size1 and size1 > 0:
+                found_specific = True
+                break
+        except:
+            pass
+    
+    # 没找到就休眠 5 秒继续
     time.sleep(5)
 
+# 2. 决策逻辑：特定文件优先，否则回退到 last.ckpt
+run_test = False
+msg = ""
+
+if found_specific:
+    run_test = True
+    msg = f"[Background] Found specific checkpoint for Epoch {{epoch}}. Starting Test...\\n"
+else:
+    # 检查 last.ckpt 是否存在
+    last_ckpt = os.path.join(save_dir, "last.ckpt")
+    if os.path.exists(last_ckpt):
+        run_test = True
+        msg = f"[Background] Specific checkpoint for Epoch {{epoch}} not found (likely not in Top-K). Fallback to 'last.ckpt'.\\n"
+    else:
+        msg = f"[Background] Timeout waiting for checkpoint (Specific or Last). Test Skipped.\\n"
+
+# 3. 执行测试
 with open(r'{log_file}', 'w') as f:
-    if found:
-        f.write(f"[Background] Found checkpoint for Epoch {{epoch}}. Starting Test...\\n")
-        f.flush()
+    f.write(msg)
+    f.flush()
+    
+    if run_test:
         try:
             subprocess.run(['bash', script_path, 'test'], stdout=f, stderr=subprocess.STDOUT, cwd=r'{script_dir}')
         except Exception as e:
             f.write(f"\\n[Background Error] {{e}}\\n")
-    else:
-        f.write(f"[Background] Timeout waiting for checkpoint. Test Skipped.\\n")
 """
+                # 启动后台进程
                 subprocess.Popen([sys.executable, '-c', background_code], cwd=script_dir, start_new_session=True)
                 
             except Exception as e:
