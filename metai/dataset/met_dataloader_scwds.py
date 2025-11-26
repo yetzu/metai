@@ -1,3 +1,4 @@
+# metai/dataset/met_dataloader_scwds.py
 import json
 import cv2
 import numpy as np
@@ -9,6 +10,10 @@ import torch.nn.functional as F
 from metai.utils import MLOGI
 from metai.dataset import MetSample
 from metai.utils.met_config import get_config
+
+# 🚨 关键修复：防止多进程死锁
+cv2.setNumThreads(0)
+cv2.ocl.setUseOpenCL(False)
 
 class ScwdsDataset(Dataset):
     def __init__(self, data_path: str, is_train: bool = True, resize_shape: Optional[tuple] = None):
@@ -25,11 +30,13 @@ class ScwdsDataset(Dataset):
         if self.resize_shape is None:
             return data
         
+        # cv2.resize 接受 (W, H)
         dsize = (self.resize_shape[1], self.resize_shape[0])
         
         if data.ndim == 4: 
             T, C, H, W = data.shape
             reshaped = data.reshape(T * C, H, W)
+            # 此时 cv2 是单线程运行，安全
             resized = np.array([cv2.resize(img, dsize, interpolation=mode) for img in reshaped])
             return resized.reshape(T, C, *self.resize_shape)
             
@@ -73,8 +80,9 @@ class ScwdsDataset(Dataset):
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
-                sample = json.loads(line)
-                samples.append(sample)
+                if line:
+                    sample = json.loads(line)
+                    samples.append(sample)
         return samples
 
 class ScwdsDataModule(LightningDataModule):
@@ -84,7 +92,7 @@ class ScwdsDataModule(LightningDataModule):
         resize_shape: tuple[int, int] = (256, 256),
         aft_seq_length: int = 20,
         batch_size: int = 4,
-        num_workers: int = 8,
+        num_workers: int = 8,  # 建议在脚本中覆盖此值
         pin_memory: bool = True,
         train_split: float = 0.8,
         val_split: float = 0.1,
@@ -130,9 +138,10 @@ class ScwdsDataModule(LightningDataModule):
             val_size = int(self.val_split * total_size)
             test_size = total_size - train_size - val_size
             
+            # 边界情况处理
             if train_size == 0 and total_size > 0:
                 train_size = 1
-                test_size = total_size - train_size - val_size
+                test_size = max(0, total_size - train_size - val_size)
             
             lengths = [train_size, val_size, test_size]
 

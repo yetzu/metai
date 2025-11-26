@@ -19,7 +19,7 @@ MODE=$1
 
 # [注意] 如果是单卡 A800，请改为 DEVICES="[0]"
 # 如果是多卡，保持 "[0,1,2,3]"，Batch Size 会自动乘以卡数 (Global Batch Size)
-DEVICES="[0, 1, 2, 3]" 
+DEVICES="[0,1,2,3]" 
 DATA_PATH="data/samples.jsonl"
 SAVE_DIR="./output/meteo_mamba_a800" # 修改输出目录以免覆盖旧实验
 
@@ -61,7 +61,7 @@ case $MODE in
             --model.mamba_expand 2 \
             --data.data_path $DATA_PATH \
             --data.batch_size 16 \
-            --data.num_workers 16
+            --data.num_workers 8
         ;;
         
     "test")
