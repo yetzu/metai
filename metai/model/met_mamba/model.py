@@ -9,34 +9,22 @@ def sampling_generator(N, reverse=False):
 
 class Encoder(nn.Module):
     """
-    3D-2D Hybrid Encoder
-    先通过 3D Stem 提取短时空特征，再通过 2D ConvSC 提取空间层级特征。
+    [精简版] Pure 2D Encoder
+    专注于提取单帧的空间特征，移除冗余的 3D 卷积。
     """
     def __init__(self, C_in, C_hid, N_S, spatio_kernel):
         super().__init__()
         
-        # [New] 3D Stem Layer: 提取短时空特征 (C_in -> C_hid)
-        # kernel_size=(3, 3, 3) 用于同时捕捉时空特征，padding=(1, 1, 1) 保持尺寸不变
+        # [修改] 2D Stem: 只在空间维度处理，大幅降低计算量
+        # C_in -> C_hid
         self.stem = nn.Sequential(
-            nn.Conv3d(C_in, C_hid, kernel_size=(3, 3, 3), stride=(1, 1, 1), padding=(1, 1, 1), bias=False),
-            nn.GroupNorm(2, C_hid), # GroupNorm 对小 Batch Size 更友好
+            nn.Conv2d(C_in, C_hid, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.GroupNorm(2, C_hid), # GroupNorm 依然适用
             nn.SiLU(inplace=True)
         )
         
-        # ============================================================
-        # [Optimization] 3D Stem 初始化
-        # 3D 卷积参数量大，默认均匀分布初始化可能导致训练初期梯度不稳定。
-        # 使用 Kaiming Normal (He initialization) 适配 SiLU/ReLU 激活。
-        # ============================================================
-        for m in self.stem.modules():
-            if isinstance(m, nn.Conv3d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-        
         samplings = sampling_generator(N_S)
         self.enc = nn.Sequential(
-            # [修改] 第一层 ConvSC 的输入通道变为 C_hid
             ConvSC(C_hid, C_hid, spatio_kernel, downsampling=samplings[0]),
             *[ConvSC(C_hid, C_hid, spatio_kernel, downsampling=s) for s in samplings[1:]]
         )
@@ -45,26 +33,24 @@ class Encoder(nn.Module):
         # x: [B, T, C, H, W]
         B, T, C, H, W = x.shape
         
-        # 1. 3D Stem 处理
-        # Conv3d 需要输入格式为 [B, C, T, H, W]
-        x = x.permute(0, 2, 1, 3, 4)
+        # Flatten time into batch: [B*T, C, H, W]
+        x = x.view(B * T, C, H, W)
+        
+        # 2D Spatial Encoding
         x = self.stem(x) 
-        # Output: [B, C_hid, T, H, W]
         
-        # 2. 转换回 2D Encoder 需要的格式
-        # Permute back to [B, T, C_hid, H, W] -> Flatten to [B*T, C_hid, H, W]
-        x = x.permute(0, 2, 1, 3, 4).contiguous()
-        x = x.view(B * T, -1, H, W)
-        
-        # 3. 后续 2D ConvSC 处理
+        # ConvSC Stages
         enc1 = self.enc[0](x)
         latent = enc1
         for i in range(1, len(self.enc)):
             latent = self.enc[i](latent)
+            
+        # latent: [B*T, C_hid, H', W']
+        # enc1:   [B*T, C_hid, H, W]
         return latent, enc1
 
 class Decoder(nn.Module):
-    """3D Decoder using 2D Convolutions"""
+    """Pure 2D Decoder"""
     def __init__(self, C_hid, C_out, N_S, spatio_kernel):
         super().__init__()
         samplings = sampling_generator(N_S, reverse=True)
@@ -77,15 +63,11 @@ class Decoder(nn.Module):
     def forward(self, hid, skip=None):
         for i in range(0, len(self.dec)-1):
             hid = self.dec[i](hid)
-        # Skip connection fusion
         Y = self.dec[-1](hid + skip)
         return self.readout(Y)
 
 class EvolutionNet(nn.Module):
-    """
-    Mamba-based Evolution Network
-    Uses STMambaBlocks for spatiotemporal modeling in latent space.
-    """
+    """Mamba-based Evolution Network (保持不变，这是核心)"""
     def __init__(self, dim_in, dim_hid, num_layers, drop=0., drop_path=0.):
         super().__init__()
         self.proj_in = nn.Linear(dim_in, dim_hid)
@@ -97,19 +79,11 @@ class EvolutionNet(nn.Module):
 
     def forward(self, x):
         # x: [B, T, C, H, W]
-        # Permute to Channel-last for Linear projection: [B, T, H, W, C]
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = self.proj_in(x)
-        
-        # Permute for STMambaBlock: [B, T, C_hid, H, W] (assuming STMamba handles this layout)
-        # Wait, modules.py STMambaBlock expects [B, T, C, H, W] or similar token handling.
-        # Let's standardize to [B, T, C, H, W] for blocks
         x = x.permute(0, 1, 4, 2, 3).contiguous()
-        
         for layer in self.layers:
             x = layer(x)
-            
-        # Project back
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = self.proj_out(x)
         x = x.permute(0, 1, 4, 2, 3).contiguous()
@@ -125,64 +99,70 @@ class MeteoMamba(nn.Module):
         if out_channels is None: out_channels = C
         self.out_channels = out_channels
         
-        # Renamed FeatureEncoder -> Encoder
+        # 1. Pure 2D Encoder
         self.enc = Encoder(C, hid_S, N_S, spatio_kernel_enc)
         
+        # 2. Spatiotemporal Evolution
         self.evolution = EvolutionNet(hid_S, hid_T, N_T, drop=0.0, drop_path=0.1)
         
-        # Latent temporal extrapolation (T_in -> T_out)
-        self.latent_time_proj = nn.Linear(T_in, self.T_out)
+        # 3. Temporal Extrapolation (Conv1d)
+        self.latent_time_proj = nn.Sequential(
+            nn.Conv1d(T_in, self.T_out, kernel_size=1),
+            nn.Conv1d(self.T_out, self.T_out, kernel_size=3, padding=1, groups=1),
+            nn.SiLU()
+        )
         
-        # Renamed FeatureDecoder -> Decoder
+        # 4. Decoder
         self.dec = Decoder(hid_S, self.out_channels, N_S, spatio_kernel_dec)
         
-        # Skip connection projector
+        # 5. Skip Connection Projection
         self.skip_proj = TimeAlignBlock(T_in, self.T_out, hid_S)
         
         self._init_time_proj()
 
     def _init_time_proj(self):
-        nn.init.normal_(self.latent_time_proj.weight, mean=0.0, std=0.01)
-        with torch.no_grad():
-            if self.latent_time_proj.weight.shape[1] > 0:
-                # Initialize to copy the last frame
-                self.latent_time_proj.weight[:, -1].fill_(1.0)
-        nn.init.constant_(self.latent_time_proj.bias, 0)
+        for m in self.latent_time_proj.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None: nn.init.constant_(m.bias, 0)
 
     def forward(self, x_raw):
-        # x_raw: [B, T_in, C_in, H, W]
+        # x_raw: [B, T_in, C, H, W]
         B, T_in, C_in, H, W = x_raw.shape
         
-        # [修改] 直接传入 5D 数据，Encoder 内部处理 3D Stem 和展平
+        # --- 1. Encoding (Spatial Only) ---
         embed, skip = self.enc(x_raw) 
-        
         # embed: [B*T_in, C_hid, H', W']
-        # skip:  [B*T_in, C_hid, H, W] (第一层特征)
         
         _, C_hid, H_, W_ = embed.shape 
         
-        # 1. Evolution in Latent Space
-        # Restore 5D for EvolutionNet: [B, T_in, C_hid, H', W']
+        # --- 2. Evolution (Spatiotemporal) ---
         z = embed.view(B, T_in, C_hid, H_, W_)
-        z = self.evolution(z)
+        z = self.evolution(z) # [B, T_in, C_hid, H_, W_]
         
-        # 2. Temporal Extrapolation (T_in -> T_out)
-        # Permute to [B, C, H, W, T] for Linear projection on T axis
-        z = z.permute(0, 2, 3, 4, 1) 
-        z = self.latent_time_proj(z) 
-        z = z.permute(0, 4, 1, 2, 3).contiguous() # [B, T_out, C_hid, H', W']
-        
-        # Flatten for Decoder: [B*T_out, C_hid, H', W']
+        # --- 3. Extrapolation (Temporal) ---
+        z = z.permute(0, 2, 3, 4, 1).contiguous().view(B, C_hid * H_ * W_, T_in)
+        z = self.latent_time_proj(z) # -> [B, ..., T_out]
+        z = z.view(B, C_hid, H_, W_, self.T_out).permute(0, 4, 1, 2, 3).contiguous()
+        # z: [B, T_out, C_hid, H_, W_] -> Flatten
         z = z.view(B * self.T_out, C_hid, H_, W_)
         
-        # 3. Skip Connection Processing
+        # --- 4. Skip Connection ---
         skip = skip.view(B, T_in, C_hid, H, W)
-        skip_out = self.skip_proj(skip) # [B, T_out, C_hid, H, W]
+        skip_out = self.skip_proj(skip)
         skip_out = skip_out.view(B * self.T_out, C_hid, H, W)
         
-        # 4. Decoding
-        Y = self.dec(z, skip_out)
+        # --- 5. Decoding ---
+        Y_diff = self.dec(z, skip_out)
+        Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         
-        # 5. Reshape to Output Sequence
-        Y = Y.reshape(B, self.T_out, self.out_channels, H, W)
+        # [核心策略改进] 残差学习 (Residual Learning)
+        # 模型预测的是变化量 Y_diff，最终结果 = 最后一帧 + 变化量
+        # 注意：这要求 T_out 序列是累积的，这里我们简化为：
+        # 每一帧的预测基于上一帧（但这在并行预测中较难），或者：
+        # 将 Y_diff 视为相对于 Input 最后一帧的变化。
+        
+        last_frame = x_raw[:, -1:].detach() # [B, 1, C, H, W]
+        Y = last_frame + Y_diff
+        
         return Y

@@ -1,4 +1,4 @@
-# metai/model/st_mamba/trainer.py
+# metai/model/met_mamba/trainer.py
 
 import lightning as l
 import torch
@@ -17,9 +17,9 @@ class MeteoMambaModule(l.LightningModule):
         aft_seq_length: int = 20,
         max_epochs: int = 50,
         lr: float = 1e-3,
-        # 简化参数
-        filter_bias_and_bn: bool = True, 
-        use_curriculum_learning: bool = False, # [修改] 关闭 CL，直接训练
+        # Loss Weights (从 Config 传入)
+        loss_weight_l1: float = 1.0,
+        loss_weight_gdl: float = 1.0,
         **kwargs
     ):
         super().__init__()
@@ -35,18 +35,22 @@ class MeteoMambaModule(l.LightningModule):
             out_channels=1
         )
         
-        # [修改] 使用简化的 HybridLoss (L1 + Evo)
-        self.criterion = HybridLoss(l1_weight=10.0, evo_weight=1.0)
+        # [修改] 适配新的 HybridLoss 参数
+        # 注意：SparseBalancedL1 内部已有 rain/bg 权重，这里 l1_weight 是整体缩放
+        self.criterion = HybridLoss(
+            l1_weight=loss_weight_l1, 
+            gdl_weight=loss_weight_gdl
+        )
         
         self.resize_shape = (in_shape[2], in_shape[3])
         self.MM_MAX = 30.0
+        # 验证指标相关
         self.val_thresholds = [0.1, 1.0, 2.0, 5.0, 8.0] 
         weights_raw = [0.1, 0.1, 0.2, 0.25, 0.35]
         total_w = sum(weights_raw)
         self.val_weights = [w / total_w for w in weights_raw]
 
     def configure_optimizers(self):
-        # 使用 AdamW + Cosine 是标配
         optimizer, scheduler, by_epoch = get_optim_scheduler(
             self.hparams, self.hparams.max_epochs, self.model
         )
@@ -64,14 +68,10 @@ class MeteoMambaModule(l.LightningModule):
         else:
             scheduler.step(metric) if metric is not None else scheduler.step()
 
-    # [修改] 移除复杂的 on_train_epoch_start 权重调整逻辑
-    # 直接全程使用固定权重训练，稳健性更好
-
     def _interpolate_batch(self, x, mode='bilinear'):
         if self.resize_shape is None: return x
         B, T, C, H, W = x.shape
         x = x.view(B * T, C, H, W)
-        # 使用 bilinear 对数值场插值
         x = torch.nn.functional.interpolate(x, size=self.resize_shape, mode='bilinear', align_corners=False)
         return x.view(B, T, C, *self.resize_shape)
 
@@ -81,14 +81,17 @@ class MeteoMambaModule(l.LightningModule):
         y = self._interpolate_batch(y, mode='bilinear')
         t_mask = self._interpolate_batch(t_mask.float(), mode='nearest')
         
-        logits = self.model(x)
-        # Sigmoid 归一化到 0-1
-        pred = torch.sigmoid(logits)
+        # [修改] Model 输出现在是 Value (Residual added)，不是 Logits
+        # 所以移除 Sigmoid，改为 Clamp 保证物理范围 [0, 1]
+        pred_raw = self.model(x)
+        pred = torch.clamp(pred_raw, 0.0, 1.0)
         
         loss, loss_dict = self.criterion(pred, y, mask=t_mask)
         
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log('loss_l1', loss_dict['l1'], on_step=True, prog_bar=False)
+        # 记录分项 Loss 方便观察 GDL 是否生效
+        self.log('loss_l1', loss_dict.get('l1', 0), on_step=False, on_epoch=True, prog_bar=False)
+        self.log('loss_gdl', loss_dict.get('gdl', 0), on_step=False, on_epoch=True, prog_bar=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -97,14 +100,12 @@ class MeteoMambaModule(l.LightningModule):
         y = self._interpolate_batch(y, mode='bilinear')
         t_mask = self._interpolate_batch(t_mask.float(), mode='nearest')
         
-        logits = self.model(x)
-        pred = torch.clamp(torch.sigmoid(logits), 0.0, 1.0)
+        pred_raw = self.model(x)
+        pred = torch.clamp(pred_raw, 0.0, 1.0)
+        
         loss, _ = self.criterion(pred, y, mask=t_mask)
         
-        if t_mask.sum() > 0:
-            mae = (torch.abs(pred - y) * t_mask).sum() / (t_mask.sum() + 1e-6)
-        else: mae = 0.0
-            
+        # 计算加权 CSI
         pred_mm = pred * self.MM_MAX
         target_mm = y * self.MM_MAX
         weighted_csi_sum = 0.0
@@ -123,11 +124,13 @@ class MeteoMambaModule(l.LightningModule):
         _, x, y, t_mask, _ = batch
         x = self._interpolate_batch(x, mode='bilinear')
         y = self._interpolate_batch(y, mode='bilinear')
-        logits = self.model(x)
-        pred = torch.clamp(torch.sigmoid(logits), 0.0, 1.0)
+        
+        pred_raw = self.model(x)
+        pred = torch.clamp(pred_raw, 0.0, 1.0)
         return {'inputs': x, 'trues': y, 'preds': pred}
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         _, x, _ = batch
         x = self._interpolate_batch(x, mode='bilinear')
-        return torch.clamp(torch.sigmoid(self.model(x)), 0.0, 1.0)
+        # 同样移除 Sigmoid，只保留 clamp
+        return torch.clamp(self.model(x), 0.0, 1.0)
