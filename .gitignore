@@ -180,3 +180,4 @@ data/
 test/
 tmp/
 output/
+lightning_logs/
