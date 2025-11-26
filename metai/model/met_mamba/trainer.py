@@ -163,7 +163,19 @@ class MeteoMambaModule(l.LightningModule):
         self.log('val_score', weighted_csi_sum, on_epoch=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
-        self.validation_step(batch, batch_idx)
+        _, x, y, t_mask, _ = batch
+        x = self._interpolate_batch(x, mode='bilinear')
+        y = self._interpolate_batch(y, mode='bilinear')
+        # t_mask = self._interpolate_batch(t_mask.float(), mode='nearest')
+
+        logits = self.model(x)
+        pred = torch.clamp(torch.sigmoid(logits), 0.0, 1.0)
+        
+        return {
+            'inputs': x,
+            'trues': y,
+            'preds': pred
+        }
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         _, x, _ = batch
