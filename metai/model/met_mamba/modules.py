@@ -188,13 +188,13 @@ class STMambaBlock(nn.Module):
     结合双向空间扫描 (Spatial) 和 双向时间扫描 (Temporal) + 自适应融合。
     优化：Locality Enhanced MLP 和 扩展的 State Dimension。
     """
-    def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU):
+    def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, 
+                 d_state=32, d_conv=4, expand=2):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         
         # [Optimization] State Expansion
-        # 将 d_state 从 16 提升至 32，增加 SSM 记忆容量，捕捉更长时序依赖
-        mamba_cfg = dict(d_model=dim, d_state=32, d_conv=4, expand=2)
+        mamba_cfg = dict(d_model=dim, d_state=d_state, d_conv=d_conv, expand=expand)
         
         # Branch 1: Spatial
         self.scan_spatial = Mamba(**mamba_cfg)

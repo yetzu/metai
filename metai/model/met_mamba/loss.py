@@ -1,3 +1,4 @@
+# metai/model/met_mamba/loss.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -32,7 +33,7 @@ class SparseBalancedL1Loss(nn.Module):
         
         # [进阶] 极值关注：对于强降水（例如 > 0.5），给予额外加成
         # 假设 0.5 对应真实值 15mm/h
-        heavy_rain = target > (0.5) 
+        heavy_rain = target > 0.5
         weights[heavy_rain] *= 2.0 
         
         loss = diff * weights
@@ -45,24 +46,42 @@ class SparseBalancedL1Loss(nn.Module):
         return loss.mean()
 
 class GradientDifferenceLoss(nn.Module):
-    """保持不变，抗模糊效果好"""
+    """
+    梯度差分损失 (Gradient Difference Loss)
+    [修正版] 分别计算 dx 和 dy 的 Loss，避免形状不匹配导致的 RuntimeError
+    """
     def __init__(self, alpha=1.0):
         super().__init__()
         self.alpha = alpha
 
     def forward(self, pred, target, mask=None):
+        # 计算 X 方向梯度 (B, T, C, H, W-1)
         p_dx = torch.abs(pred[..., :, 1:] - pred[..., :, :-1])
-        p_dy = torch.abs(pred[..., 1:, :] - pred[..., :-1, :])
         t_dx = torch.abs(target[..., :, 1:] - target[..., :, :-1])
+        
+        # 计算 Y 方向梯度 (B, T, C, H-1, W)
+        p_dy = torch.abs(pred[..., 1:, :] - pred[..., :-1, :])
         t_dy = torch.abs(target[..., 1:, :] - target[..., :-1, :])
-        loss = torch.abs(p_dx - t_dx) + torch.abs(p_dy - t_dy)
+        
+        # 分别计算两个方向的绝对误差
+        gdl_x = torch.abs(p_dx - t_dx)
+        gdl_y = torch.abs(p_dy - t_dy)
+        
         if mask is not None:
+            # 处理 Mask：只有相邻两个像素都有效时，梯度才有效
+            # Mask X: (..., H, W-1)
             mask_x = mask[..., :, 1:] * mask[..., :, :-1]
+            # Mask Y: (..., H-1, W)
             mask_y = mask[..., 1:, :] * mask[..., :-1, :]
-            loss_x = (loss * mask_x[..., None]).sum() / (mask_x.sum() + 1e-6) # 修正维度广播
-            # 这里简化处理，直接返回 mean 即可，GDL 对稀疏数据也有效
-            return loss.mean() * self.alpha
-        return loss.mean() * self.alpha
+            
+            # 加权求和并归一化
+            loss_x = (gdl_x * mask_x).sum() / (mask_x.sum() + 1e-6)
+            loss_y = (gdl_y * mask_y).sum() / (mask_y.sum() + 1e-6)
+            
+            return (loss_x + loss_y) * self.alpha
+            
+        # 无 Mask 情况，直接求均值
+        return (gdl_x.mean() + gdl_y.mean()) * self.alpha
 
 class HybridLoss(nn.Module):
     """
