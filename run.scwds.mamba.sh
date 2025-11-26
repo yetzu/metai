@@ -38,6 +38,7 @@ case $MODE in
             --trainer.max_epochs 50 \
             --trainer.accumulate_grad_batches 1 \
             --trainer.log_every_n_steps 10 \
+            --trainer.accumulate_grad_batches 16
             --trainer.gradient_clip_val 1.0 \
             --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
             --trainer.callbacks.monitor "val_score" \
@@ -46,8 +47,6 @@ case $MODE in
             --trainer.callbacks.save_last true \
             --trainer.callbacks.filename "{epoch:02d}-{val_score:.4f}" \
             --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
-            --trainer.callbacks.monitor "val_score" \
-            --trainer.callbacks.mode "max" \
             --trainer.callbacks.patience 30 \
             --model.in_shape "[10, 31, 256, 256]" \
             --model.aft_seq_length 20 \
@@ -60,7 +59,7 @@ case $MODE in
             --model.mamba_d_conv 4 \
             --model.mamba_expand 2 \
             --data.data_path $DATA_PATH \
-            --data.batch_size 16 \
+            --data.batch_size 1 \
             --data.num_workers 8
         ;;
         

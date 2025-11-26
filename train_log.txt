@@ -4,44 +4,724 @@ nohup: ignoring input
 --------------------------------------------------------
 Seed set to 42
 Using bfloat16 Automatic Mixed Precision (AMP)
+💡 Tip: For seamless cloud uploads and versioning, try installing [litmodels](https://pypi.org/project/litmodels/) to enable LitModelCheckpoint, which syncs automatically with the Lightning model registry.
 GPU available: True (cuda), used: True
 TPU available: False, using: 0 TPU cores
 HPU available: False, using: 0 HPUs
 Initializing distributed: GLOBAL_RANK: 0, MEMBER: 1/4
 [rank: 3] Seed set to 42
-[rank: 1] Seed set to 42
 [rank: 2] Seed set to 42
+[rank: 1] Seed set to 42
 Initializing distributed: GLOBAL_RANK: 3, MEMBER: 4/4
-Initializing distributed: GLOBAL_RANK: 1, MEMBER: 2/4
 Initializing distributed: GLOBAL_RANK: 2, MEMBER: 3/4
+Initializing distributed: GLOBAL_RANK: 1, MEMBER: 2/4
 ----------------------------------------------------------------------------------------------------
 distributed_backend=nccl
 All distributed processes registered. Starting with 4 processes
 ----------------------------------------------------------------------------------------------------
 
 NCCL version 2.27.3+cuda12.9
-LOCAL_RANK: 2 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 LOCAL_RANK: 3 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
-LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 LOCAL_RANK: 1 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
+LOCAL_RANK: 2 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/utilities/model_summary/model_summary.py:231: Precision bf16-mixed is not supported by the model summary.  Estimated model size in MB will not be accurate. Using 32 bits instead.
 
   | Name      | Type       | Params | Mode 
 -------------------------------------------------
-0 | model     | MeteoMamba | 9.2 M  | train
+0 | model     | MeteoMamba | 12.1 M | train
 1 | criterion | HybridLoss | 0      | train
 -------------------------------------------------
-9.2 M     Trainable params
+12.1 M    Trainable params
 0         Non-trainable params
-9.2 M     Total params
-36.974    Total estimated model params size (MB)
-248       Modules in train mode
+12.1 M    Total params
+48.538    Total estimated model params size (MB)
+308       Modules in train mode
 0         Modules in eval mode
-[2025-11-26 23:37:40.502] [INFO] 从配置文件加载配置: /home/yyj/code/metai/config.yaml (is_debug=False)
-[2025-11-26 23:37:41.477] [INFO] Dataset split: Train=15160, Val=1895, Test=1895
-Sanity Checking: |          | 0/? [00:00<?, ?it/s][2025-11-26 23:37:40.501] [INFO] 从配置文件加载配置: /home/yyj/code/metai/config.yaml (is_debug=False)
-[2025-11-26 23:37:41.221] [INFO] Dataset split: Train=15160, Val=1895, Test=1895
-[2025-11-26 23:37:40.501] [INFO] 从配置文件加载配置: /home/yyj/code/metai/config.yaml (is_debug=False)
-[2025-11-26 23:37:41.109] [INFO] Dataset split: Train=15160, Val=1895, Test=1895
-[2025-11-26 23:37:40.500] [INFO] 从配置文件加载配置: /home/yyj/code/metai/config.yaml (is_debug=False)
-[2025-11-26 23:37:41.097] [INFO] Dataset split: Train=15160, Val=1895, Test=1895
+[2025-11-26 23:59:26.291] [INFO] 从配置文件加载配置: /home/yyj/code/metai/config.yaml (is_debug=False)
+[2025-11-26 23:59:26.509] [INFO] Dataset split: Train=15160, Val=1895, Test=1895
+Sanity Checking: |          | 0/? [00:00<?, ?it/s][2025-11-26 23:59:26.291] [INFO] 从配置文件加载配置: /home/yyj/code/metai/config.yaml (is_debug=False)
+[2025-11-26 23:59:26.790] [INFO] Dataset split: Train=15160, Val=1895, Test=1895
+[2025-11-26 23:59:26.293] [INFO] 从配置文件加载配置: /home/yyj/code/metai/config.yaml (is_debug=False)
+[2025-11-26 23:59:27.060] [INFO] Dataset split: Train=15160, Val=1895, Test=1895
+[2025-11-26 23:59:26.292] [INFO] 从配置文件加载配置: /home/yyj/code/metai/config.yaml (is_debug=False)
+[2025-11-26 23:59:26.868] [INFO] Dataset split: Train=15160, Val=1895, Test=1895
+Sanity Checking: |          | 0/? [00:00<?, ?it/s]Sanity Checking DataLoader 0:   0%|          | 0/2 [00:00<?, ?it/s]Sanity Checking DataLoader 0:  50%|█████     | 1/2 [00:08<00:08,  0.11it/s]Sanity Checking DataLoader 0: 100%|██████████| 2/2 [00:10<00:00,  0.19it/s]                                                                           Training: |          | 0/? [00:00<?, ?it/s]Training: |          | 0/? [00:00<?, ?it/s]Epoch 0:   0%|          | 0/948 [00:00<?, ?it/s][rank1]: Traceback (most recent call last):
+[rank1]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
+[rank1]:     main()
+[rank1]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
+[rank1]:     cli = LightningCLI(
+[rank1]:           ^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
+[rank1]:     self._run_subcommand(self.subcommand)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
+[rank1]:     fn(**fn_kwargs)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
+[rank1]:     call._call_and_handle_interrupt(
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
+[rank1]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
+[rank1]:     return function(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
+[rank1]:     self._run(model, ckpt_path=ckpt_path)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
+[rank1]:     results = self._run_stage()
+[rank1]:               ^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1055, in _run_stage
+[rank1]:     self.fit_loop.run()
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 216, in run
+[rank1]:     self.advance()
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 458, in advance
+[rank1]:     self.epoch_loop.run(self._data_fetcher)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 152, in run
+[rank1]:     self.advance(data_fetcher)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 348, in advance
+[rank1]:     batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+[rank1]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 185, in run
+[rank1]:     closure()
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 146, in __call__
+[rank1]:     self._result = self.closure(*args, **kwargs)
+[rank1]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank1]:     return func(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 131, in closure
+[rank1]:     step_output = self._step_fn()
+[rank1]:                   ^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 319, in _training_step
+[rank1]:     training_step_output = call._call_strategy_hook(trainer, "training_step", *kwargs.values())
+[rank1]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 329, in _call_strategy_hook
+[rank1]:     output = fn(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 390, in training_step
+[rank1]:     return self._forward_redirection(self.model, self.lightning_module, "training_step", *args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 641, in __call__
+[rank1]:     wrapper_output = wrapper_module(*args, **kwargs)
+[rank1]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 1648, in forward
+[rank1]:     else self._run_ddp_forward(*inputs, **kwargs)
+[rank1]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 1474, in _run_ddp_forward
+[rank1]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 634, in wrapped_forward
+[rank1]:     out = method(*_args, **_kwargs)
+[rank1]:           ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/code/metai/model/met_mamba/trainer.py", line 114, in training_step
+[rank1]:     pred_raw = self.model(x)
+[rank1]:                ^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/code/metai/model/met_mamba/model.py", line 140, in forward
+[rank1]:     z = self.evolution(z) 
+[rank1]:         ^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/code/metai/model/met_mamba/model.py", line 78, in forward
+[rank1]:     x = layer(x)
+[rank1]:         ^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/code/metai/model/met_mamba/modules.py", line 255, in forward
+[rank1]:     x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
+[rank1]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/code/metai/model/met_mamba/modules.py", line 116, in forward
+[rank1]:     x = self.act(x)
+[rank1]:         ^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/activation.py", line 738, in forward
+[rank1]:     return F.gelu(input, approximate=self.approximate)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 320.00 MiB. GPU 1 has a total capacity of 79.11 GiB of which 70.81 MiB is free. Including non-PyTorch memory, this process has 79.01 GiB memory in use. Of the allocated memory 78.03 GiB is allocated by PyTorch, and 21.35 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
+[rank0]:     cli = LightningCLI(
+[rank0]:           ^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
+[rank0]:     self._run_subcommand(self.subcommand)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
+[rank0]:     fn(**fn_kwargs)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
+[rank0]:     call._call_and_handle_interrupt(
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
+[rank0]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
+[rank0]:     return function(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
+[rank0]:     self._run(model, ckpt_path=ckpt_path)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
+[rank0]:     results = self._run_stage()
+[rank0]:               ^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1055, in _run_stage
+[rank0]:     self.fit_loop.run()
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 216, in run
+[rank0]:     self.advance()
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 458, in advance
+[rank0]:     self.epoch_loop.run(self._data_fetcher)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 152, in run
+[rank0]:     self.advance(data_fetcher)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 348, in advance
+[rank0]:     batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+[rank0]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 185, in run
+[rank0]:     closure()
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 146, in __call__
+[rank0]:     self._result = self.closure(*args, **kwargs)
+[rank0]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank0]:     return func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 131, in closure
+[rank0]:     step_output = self._step_fn()
+[rank0]:                   ^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 319, in _training_step
+[rank0]:     training_step_output = call._call_strategy_hook(trainer, "training_step", *kwargs.values())
+[rank0]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 329, in _call_strategy_hook
+[rank0]:     output = fn(*args, **kwargs)
+[rank0]:              ^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 390, in training_step
+[rank0]:     return self._forward_redirection(self.model, self.lightning_module, "training_step", *args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 641, in __call__
+[rank0]:     wrapper_output = wrapper_module(*args, **kwargs)
+[rank0]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 1648, in forward
+[rank0]:     else self._run_ddp_forward(*inputs, **kwargs)
+[rank0]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 1474, in _run_ddp_forward
+[rank0]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 634, in wrapped_forward
+[rank0]:     out = method(*_args, **_kwargs)
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/code/metai/model/met_mamba/trainer.py", line 114, in training_step
+[rank0]:     pred_raw = self.model(x)
+[rank0]:                ^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/code/metai/model/met_mamba/model.py", line 140, in forward
+[rank0]:     z = self.evolution(z) 
+[rank0]:         ^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/code/metai/model/met_mamba/model.py", line 78, in forward
+[rank0]:     x = layer(x)
+[rank0]:         ^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/code/metai/model/met_mamba/modules.py", line 255, in forward
+[rank0]:     x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
+[rank0]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/code/metai/model/met_mamba/modules.py", line 116, in forward
+[rank0]:     x = self.act(x)
+[rank0]:         ^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/activation.py", line 738, in forward
+[rank0]:     return F.gelu(input, approximate=self.approximate)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 320.00 MiB. GPU 0 has a total capacity of 79.11 GiB of which 86.81 MiB is free. Including non-PyTorch memory, this process has 78.99 GiB memory in use. Of the allocated memory 78.03 GiB is allocated by PyTorch, and 21.35 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+[rank3]:[W1127 00:00:03.856150019 TCPStore.cpp:125] [c10d] recvValue failed on SocketImpl(fd=54, addr=[localhost]:35288, remote=[localhost]:54571): Failed to recv, got 0 bytes. Connection was likely closed. Did the remote server shutdown or crash?
+Exception raised from recvBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:682 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x79e338f7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x79e31c7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d6a8ed (0x79e31c76a8ed in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b49a (0x79e31c76b49a in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x31e (0x79e31c7661be in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x79e2c0e70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x79e2a42dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x79e339e9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x79e339f29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank2]:[W1127 00:00:03.856511543 TCPStore.cpp:125] [c10d] recvValue failed on SocketImpl(fd=54, addr=[localhost]:35300, remote=[localhost]:54571): Failed to recv, got 0 bytes. Connection was likely closed. Did the remote server shutdown or crash?
+Exception raised from recvBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:682 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x729827b7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x72980b7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d6a8ed (0x72980b76a8ed in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b49a (0x72980b76b49a in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x31e (0x72980b7661be in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7297afe70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x7297932dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x729828c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x729828d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank3]:[W1127 00:00:03.861205638 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 3] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Failed to recv, got 0 bytes. Connection was likely closed. Did the remote server shutdown or crash?
+[rank2]:[W1127 00:00:03.861221988 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Failed to recv, got 0 bytes. Connection was likely closed. Did the remote server shutdown or crash?
+[rank2]:[W1127 00:00:04.861405115 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35300, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x729827b7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x72980b7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x72980b769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x72980b76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x72980b7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7297afe70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x7297932dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x729828c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x729828d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank2]:[W1127 00:00:04.866198530 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank3]:[W1127 00:00:04.861405075 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35288, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x79e338f7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x79e31c7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x79e31c769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x79e31c76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x79e31c7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x79e2c0e70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x79e2a42dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x79e339e9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x79e339f29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank3]:[W1127 00:00:04.866305231 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 3] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank3]:[W1127 00:00:05.866454016 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35288, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x79e338f7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x79e31c7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x79e31c769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x79e31c76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x79e31c7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x79e2c0e70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x79e2a42dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x79e339e9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x79e339f29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank2]:[W1127 00:00:05.866475546 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35300, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x729827b7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x72980b7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x72980b769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x72980b76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x72980b7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7297afe70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x7297932dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x729828c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x729828d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank3]:[W1127 00:00:05.871133000 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 3] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank2]:[W1127 00:00:05.871160040 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank3]:[W1127 00:00:06.871319602 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35288, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x79e338f7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x79e31c7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x79e31c769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x79e31c76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x79e31c7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x79e2c0e70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x79e2a42dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x79e339e9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x79e339f29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank2]:[W1127 00:00:06.871319502 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35300, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x729827b7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x72980b7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x72980b769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x72980b76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x72980b7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7297afe70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x7297932dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x729828c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x729828d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank3]:[W1127 00:00:06.876382461 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 3] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank2]:[W1127 00:00:06.876436831 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank3]:[W1127 00:00:07.876627712 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35288, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x79e338f7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x79e31c7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x79e31c769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x79e31c76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x79e31c7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x79e2c0e70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x79e2a42dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x79e339e9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x79e339f29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank2]:[W1127 00:00:07.876627602 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35300, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x729827b7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x72980b7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x72980b769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x72980b76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x72980b7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7297afe70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x7297932dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x729828c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x729828d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank3]:[W1127 00:00:07.881241055 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 3] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank2]:[W1127 00:00:07.881268275 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank3]: Traceback (most recent call last):
+[rank3]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
+[rank3]:     main()
+[rank3]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
+[rank3]:     cli = LightningCLI(
+[rank3]:           ^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
+[rank3]:     self._run_subcommand(self.subcommand)
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
+[rank3]:     fn(**fn_kwargs)
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
+[rank3]:     call._call_and_handle_interrupt(
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
+[rank3]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
+[rank3]:     return function(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
+[rank3]:     self._run(model, ckpt_path=ckpt_path)
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
+[rank3]:     results = self._run_stage()
+[rank3]:               ^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1055, in _run_stage
+[rank3]:     self.fit_loop.run()
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 216, in run
+[rank3]:     self.advance()
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 458, in advance
+[rank3]:     self.epoch_loop.run(self._data_fetcher)
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 152, in run
+[rank3]:     self.advance(data_fetcher)
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 348, in advance
+[rank3]:     batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+[rank3]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 185, in run
+[rank3]:     closure()
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 146, in __call__
+[rank3]:     self._result = self.closure(*args, **kwargs)
+[rank3]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank3]:     return func(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 131, in closure
+[rank3]:     step_output = self._step_fn()
+[rank3]:                   ^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 319, in _training_step
+[rank3]:     training_step_output = call._call_strategy_hook(trainer, "training_step", *kwargs.values())
+[rank3]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 329, in _call_strategy_hook
+[rank3]:     output = fn(*args, **kwargs)
+[rank3]:              ^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 390, in training_step
+[rank3]:     return self._forward_redirection(self.model, self.lightning_module, "training_step", *args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 641, in __call__
+[rank3]:     wrapper_output = wrapper_module(*args, **kwargs)
+[rank3]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank3]:     return self._call_impl(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank3]:     return forward_call(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 1648, in forward
+[rank3]:     else self._run_ddp_forward(*inputs, **kwargs)
+[rank3]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 1474, in _run_ddp_forward
+[rank3]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank3]:     return self._call_impl(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank3]:     return forward_call(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 634, in wrapped_forward
+[rank3]:     out = method(*_args, **_kwargs)
+[rank3]:           ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/code/metai/model/met_mamba/trainer.py", line 114, in training_step
+[rank3]:     pred_raw = self.model(x)
+[rank3]:                ^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank3]:     return self._call_impl(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank3]:     return forward_call(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/code/metai/model/met_mamba/model.py", line 140, in forward
+[rank3]:     z = self.evolution(z) 
+[rank3]:         ^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank3]:     return self._call_impl(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank3]:     return forward_call(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/code/metai/model/met_mamba/model.py", line 78, in forward
+[rank3]:     x = layer(x)
+[rank3]:         ^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank3]:     return self._call_impl(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank3]:     return forward_call(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/code/metai/model/met_mamba/modules.py", line 255, in forward
+[rank3]:     x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
+[rank3]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank3]:     return self._call_impl(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank3]:     return forward_call(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/code/metai/model/met_mamba/modules.py", line 116, in forward
+[rank3]:     x = self.act(x)
+[rank3]:         ^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank3]:     return self._call_impl(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank3]:     return forward_call(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/activation.py", line 738, in forward
+[rank3]:     return F.gelu(input, approximate=self.approximate)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 320.00 MiB. GPU 3 has a total capacity of 79.11 GiB of which 66.81 MiB is free. Including non-PyTorch memory, this process has 79.01 GiB memory in use. Of the allocated memory 78.03 GiB is allocated by PyTorch, and 21.35 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+[rank2]:[W1127 00:00:08.881465773 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35300, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x729827b7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x72980b7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x72980b769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x72980b76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x72980b7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7297afe70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x7297932dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x729828c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x729828d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank2]:[W1127 00:00:08.886133167 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank2]:[W1127 00:00:09.886360283 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35300, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x729827b7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x72980b7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x72980b769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x72980b76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x72980b7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7297afe70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x7297932dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x729828c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x729828d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank2]:[W1127 00:00:09.890900585 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank2]:[W1127 00:00:10.891141319 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:35300, remote=[localhost]:54571): Broken pipe
+Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
+frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x729827b7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
+frame #1: <unknown function> + 0x5d694f1 (0x72980b7694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #2: <unknown function> + 0x5d69d82 (0x72980b769d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #3: <unknown function> + 0x5d6b88e (0x72980b76b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x72980b7661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
+frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7297afe70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
+frame #6: <unknown function> + 0xdbbf4 (0x7297932dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
+frame #7: <unknown function> + 0x9caa4 (0x729828c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
+frame #8: <unknown function> + 0x129c6c (0x729828d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
+
+[rank2]:[W1127 00:00:10.895895184 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
+[rank2]: Traceback (most recent call last):
+[rank2]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
+[rank2]:     main()
+[rank2]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
+[rank2]:     cli = LightningCLI(
+[rank2]:           ^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
+[rank2]:     self._run_subcommand(self.subcommand)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
+[rank2]:     fn(**fn_kwargs)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
+[rank2]:     call._call_and_handle_interrupt(
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
+[rank2]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
+[rank2]:     return function(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
+[rank2]:     self._run(model, ckpt_path=ckpt_path)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
+[rank2]:     results = self._run_stage()
+[rank2]:               ^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1055, in _run_stage
+[rank2]:     self.fit_loop.run()
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 216, in run
+[rank2]:     self.advance()
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 458, in advance
+[rank2]:     self.epoch_loop.run(self._data_fetcher)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 152, in run
+[rank2]:     self.advance(data_fetcher)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 348, in advance
+[rank2]:     batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+[rank2]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 185, in run
+[rank2]:     closure()
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 146, in __call__
+[rank2]:     self._result = self.closure(*args, **kwargs)
+[rank2]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank2]:     return func(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 131, in closure
+[rank2]:     step_output = self._step_fn()
+[rank2]:                   ^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 319, in _training_step
+[rank2]:     training_step_output = call._call_strategy_hook(trainer, "training_step", *kwargs.values())
+[rank2]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 329, in _call_strategy_hook
+[rank2]:     output = fn(*args, **kwargs)
+[rank2]:              ^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 390, in training_step
+[rank2]:     return self._forward_redirection(self.model, self.lightning_module, "training_step", *args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 641, in __call__
+[rank2]:     wrapper_output = wrapper_module(*args, **kwargs)
+[rank2]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank2]:     return self._call_impl(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank2]:     return forward_call(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 1648, in forward
+[rank2]:     else self._run_ddp_forward(*inputs, **kwargs)
+[rank2]:          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/parallel/distributed.py", line 1474, in _run_ddp_forward
+[rank2]:     return self.module(*inputs, **kwargs)  # type: ignore[index]
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank2]:     return self._call_impl(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank2]:     return forward_call(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 634, in wrapped_forward
+[rank2]:     out = method(*_args, **_kwargs)
+[rank2]:           ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/code/metai/model/met_mamba/trainer.py", line 114, in training_step
+[rank2]:     pred_raw = self.model(x)
+[rank2]:                ^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank2]:     return self._call_impl(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank2]:     return forward_call(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/code/metai/model/met_mamba/model.py", line 140, in forward
+[rank2]:     z = self.evolution(z) 
+[rank2]:         ^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank2]:     return self._call_impl(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank2]:     return forward_call(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/code/metai/model/met_mamba/model.py", line 78, in forward
+[rank2]:     x = layer(x)
+[rank2]:         ^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank2]:     return self._call_impl(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank2]:     return forward_call(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/code/metai/model/met_mamba/modules.py", line 255, in forward
+[rank2]:     x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
+[rank2]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank2]:     return self._call_impl(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank2]:     return forward_call(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/code/metai/model/met_mamba/modules.py", line 116, in forward
+[rank2]:     x = self.act(x)
+[rank2]:         ^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+[rank2]:     return self._call_impl(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+[rank2]:     return forward_call(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/nn/modules/activation.py", line 738, in forward
+[rank2]:     return F.gelu(input, approximate=self.approximate)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 320.00 MiB. GPU 2 has a total capacity of 79.11 GiB of which 78.81 MiB is free. Including non-PyTorch memory, this process has 78.99 GiB memory in use. Of the allocated memory 78.03 GiB is allocated by PyTorch, and 21.35 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+run.scwds.mamba.sh: line 42: --trainer.gradient_clip_val: command not found
+✅ 操作完成！
