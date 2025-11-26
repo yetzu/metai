@@ -1,4 +1,6 @@
 import json
+import cv2
+import numpy as np
 from typing import List, Dict, Any, Optional
 import torch
 from lightning.pytorch import LightningDataModule
@@ -9,28 +11,36 @@ from metai.dataset import MetSample
 from metai.utils.met_config import get_config
 
 class ScwdsDataset(Dataset):
-    def __init__(self, data_path: str, is_train: bool = True):
+    def __init__(self, data_path: str, is_train: bool = True, resize_shape: Optional[tuple] = None):
         self.data_path = data_path
         self.config = get_config()
         self.samples = self._load_samples_from_jsonl(data_path)
         self.is_train = is_train
+        self.resize_shape = resize_shape 
         
     def __len__(self):
-        """返回样本数量"""
         return len(self.samples)
 
-    def __getitem__(self, idx):
-        """
-        获取指定索引的样本数据
+    def _resize_array(self, data, mode=cv2.INTER_LINEAR):
+        if self.resize_shape is None:
+            return data
         
-        Args:
-            idx: 样本索引
+        dsize = (self.resize_shape[1], self.resize_shape[0])
+        
+        if data.ndim == 4: 
+            T, C, H, W = data.shape
+            reshaped = data.reshape(T * C, H, W)
+            resized = np.array([cv2.resize(img, dsize, interpolation=mode) for img in reshaped])
+            return resized.reshape(T, C, *self.resize_shape)
             
-        Returns: 
-            tuple[Dict, np.ndarray, Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]
-                - (metadata, input_data, target_data, target_mask, input_mask)
-                - target_data/target_mask 在推理模式下为 None
-        """
+        elif data.ndim == 3: 
+            C, H, W = data.shape
+            resized = np.array([cv2.resize(img, dsize, interpolation=mode) for img in data])
+            return resized.reshape(C, *self.resize_shape)
+            
+        return data
+
+    def __getitem__(self, idx):
         record = self.samples[idx]
         
         sample = MetSample.create(
@@ -40,10 +50,25 @@ class ScwdsDataset(Dataset):
             is_train=self.is_train,
         )
         
-        return sample.to_numpy(is_train=self.is_train) 
+        metadata, input_np, target_np, target_mask_np, input_mask_np = sample.to_numpy(is_train=self.is_train)
+        
+        if self.resize_shape is not None:
+            input_np = self._resize_array(input_np, mode=cv2.INTER_LINEAR)
+            
+            if target_np is not None:
+                target_np = self._resize_array(target_np, mode=cv2.INTER_LINEAR)
+            
+            if target_mask_np is not None:
+                target_mask_float = target_mask_np.astype(np.float32)
+                target_mask_np = self._resize_array(target_mask_float, mode=cv2.INTER_NEAREST).astype(bool)
+            
+            if input_mask_np is not None:
+                input_mask_float = input_mask_np.astype(np.float32)
+                input_mask_np = self._resize_array(input_mask_float, mode=cv2.INTER_NEAREST).astype(bool)
+        
+        return metadata, input_np, target_np, target_mask_np, input_mask_np
                         
     def _load_samples_from_jsonl(self, file_path: str)-> List[Dict[str, Any]]:
-        """加载JSONL文件中的样本数据"""
         samples = []
         with open(file_path, 'r', encoding='utf-8') as f:
             for line in f:
@@ -79,46 +104,40 @@ class ScwdsDataModule(LightningDataModule):
         self.seed = seed
 
     def setup(self, stage: Optional[str] = None):
-        """设置数据集"""
         if stage == "infer":
-            # 推理模式下，直接创建推理数据集，不需要进行 train/val/test 分割
             self.infer_dataset = ScwdsDataset(
                 self.data_path, 
-                is_train=False
+                is_train=False,
+                resize_shape=self.resize_shape
             )
             MLOGI(f"Infer dataset size: {len(self.infer_dataset)}")
             return
         
-        # 训练/验证/测试模式下，进行数据集分割
         if not hasattr(self, 'dataset'):
             self.dataset = ScwdsDataset(
                 data_path=self.data_path,
-                is_train=True
+                is_train=True,
+                resize_shape=self.resize_shape 
             )
             
             total_size = len(self.dataset)
             
-            # 如果数据集为空或太小，跳过分割
             if total_size == 0:
                 MLOGI("Warning: Dataset is empty, skipping split")
                 return
             
-            # 计算划分的尺寸
             train_size = int(self.train_split * total_size)
             val_size = int(self.val_split * total_size)
             test_size = total_size - train_size - val_size
             
-            # 确保至少有一个样本在训练集中（如果数据集不为空）
             if train_size == 0 and total_size > 0:
                 train_size = 1
                 test_size = total_size - train_size - val_size
             
             lengths = [train_size, val_size, test_size]
 
-            # 创建随机生成器以确保划分的可复现性
             generator = torch.Generator().manual_seed(self.seed)
 
-            # 使用 torch.utils.data.random_split 进行随机划分
             self.train_dataset, self.val_dataset, self.test_dataset = torch.utils.data.random_split(
                 self.dataset, lengths, generator=generator
             )
@@ -126,18 +145,15 @@ class ScwdsDataModule(LightningDataModule):
             MLOGI(f"Dataset split: Train={len(self.train_dataset)}, Val={len(self.val_dataset)}, Test={len(self.test_dataset)}")
 
     def _interpolate_batch(self, batch_tensor: torch.Tensor, mode: str = 'bilinear') -> torch.Tensor:
-        """
-        高效的批量插值函数，处理 (B, T, C, H, W) 格式的tensor
-        """
+        if batch_tensor.shape[-2:] == self.resize_shape:
+            return batch_tensor
+            
         B, T, C, H, W = batch_tensor.shape
         batch_tensor = batch_tensor.view(B * T, C, H, W)
         batch_tensor = F.interpolate(batch_tensor, size=self.resize_shape, mode=mode, align_corners=False if mode == 'bilinear' else None)
         return batch_tensor.view(B, T, C, *self.resize_shape)
 
     def _collate_fn(self, batch):
-        """
-        自定义collate函数，用于训练/验证/测试。
-        """
         metadata_batch = []
         input_tensors = []
         target_tensors = []
@@ -159,9 +175,6 @@ class ScwdsDataModule(LightningDataModule):
         return metadata_batch, input_batch, target_batch, target_mask_batch, input_mask_batch
 
     def _collate_fn_infer(self, batch):
-        """
-        自定义collate函数，用于推理。
-        """
         metadata_batch = []
         input_tensors = []
         input_mask_tensors = []
@@ -176,63 +189,22 @@ class ScwdsDataModule(LightningDataModule):
         
         return metadata_batch, input_batch, input_mask_batch
 
-
     def train_dataloader(self):
-        """返回训练数据加载器"""
         if not hasattr(self, 'train_dataset'):
             self.setup('fit')
-            
-        return DataLoader(
-            self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=True if self.num_workers > 0 else False,
-            collate_fn=self._collate_fn,
-        )
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, pin_memory=self.pin_memory, persistent_workers=True if self.num_workers > 0 else False, collate_fn=self._collate_fn)
 
     def val_dataloader(self) -> Optional[DataLoader]:
-        """返回验证数据加载器"""
         if not hasattr(self, 'val_dataset'):
             self.setup('fit')
-            
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=True if self.num_workers > 0 else False,
-            collate_fn=self._collate_fn,
-        )
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, pin_memory=self.pin_memory, persistent_workers=True if self.num_workers > 0 else False, collate_fn=self._collate_fn)
 
     def test_dataloader(self) -> Optional[DataLoader]:
-        """返回测试数据加载器"""
         if not hasattr(self, 'test_dataset'):
             self.setup('test')
-            
-        return DataLoader(
-            self.test_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=True if self.num_workers > 0 else False,
-            collate_fn=self._collate_fn,
-        )
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, pin_memory=self.pin_memory, persistent_workers=True if self.num_workers > 0 else False, collate_fn=self._collate_fn)
 
     def infer_dataloader(self) -> Optional[DataLoader]:
-        """返回推理数据加载器"""
         if not hasattr(self, 'infer_dataset'):
             self.setup('infer')
-            
-        return DataLoader(
-            self.infer_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=True if self.num_workers > 0 else False,
-            collate_fn=self._collate_fn_infer # 推理使用三个元素的 collate_fn_infer
-        )
+        return DataLoader(self.infer_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers, pin_memory=self.pin_memory, persistent_workers=True if self.num_workers > 0 else False, collate_fn=self._collate_fn_infer)

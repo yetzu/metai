@@ -28,8 +28,6 @@ class MeteoMambaConfig(BaseModel):
     
     N_S: int = 4
     N_T: int = 8 # 保持 8 层，若模型收敛很快但上限不够，可尝试改为 12
-    spatio_kernel_enc: int = 3
-    spatio_kernel_dec: int = 3
 
     # [新增] Mamba 核心参数
     mamba_d_state: int = 16  # 默认值，脚本中可覆盖

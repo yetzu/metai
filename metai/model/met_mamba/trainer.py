@@ -1,5 +1,3 @@
-# metai/model/met_mamba/trainer.py
-
 import lightning as l
 import torch
 from .model import MeteoMamba
@@ -26,7 +24,7 @@ class MeteoMambaModule(l.LightningModule):
         use_curriculum_learning: bool = False,
         max_epochs: int = 50,
         
-        # --- 优化器与调度器参数 (完整版) ---
+        # --- 优化器与调度器参数 ---
         opt: str = "adamw",
         lr: float = 1e-3,
         weight_decay: float = 0.01,
@@ -37,9 +35,6 @@ class MeteoMambaModule(l.LightningModule):
         warmup_epoch: int = 5,
         decay_epoch: int = 30,
         decay_rate: float = 0.1,
-        
-        # [修复点] 必须添加此参数，optim_scheduler.py 强依赖它
-        # False: 对 bias 和 bn 层也使用 weight_decay (通常选 False 或 True 均可，这里给个默认值防止报错)
         filter_bias_and_bn: bool = False, 
         
         # --- Loss 权重 ---
@@ -49,7 +44,6 @@ class MeteoMambaModule(l.LightningModule):
         **kwargs
     ):
         super().__init__()
-        # 保存所有超参，供 get_optim_scheduler 使用
         self.save_hyperparameters()
         
         self.model = MeteoMamba(
@@ -72,7 +66,8 @@ class MeteoMambaModule(l.LightningModule):
         
         self.resize_shape = (in_shape[2], in_shape[3])
         self.MM_MAX = 30.0
-        # 验证指标相关
+        
+        # 验证指标相关 (CSI Thresholds)
         self.val_thresholds = [0.1, 1.0, 2.0, 5.0, 8.0] 
         weights_raw = [0.1, 0.1, 0.2, 0.25, 0.35]
         total_w = sum(weights_raw)
@@ -97,7 +92,13 @@ class MeteoMambaModule(l.LightningModule):
             scheduler.step(metric) if metric is not None else scheduler.step()
 
     def _interpolate_batch(self, x, mode='bilinear'):
+        """
+        保留插值函数作为安全检查。
+        如果 Dataset 已经 Resize 好了 (Expected)，这里直接返回。
+        """
         if self.resize_shape is None: return x
+        if x.shape[-2:] == self.resize_shape: return x
+        
         B, T, C, H, W = x.shape
         x = x.view(B * T, C, H, W)
         x = torch.nn.functional.interpolate(x, size=self.resize_shape, mode='bilinear', align_corners=False)
@@ -105,9 +106,10 @@ class MeteoMambaModule(l.LightningModule):
 
     def training_step(self, batch, batch_idx):
         _, x, y, t_mask, _ = batch
-        x = self._interpolate_batch(x, mode='bilinear')
-        y = self._interpolate_batch(y, mode='bilinear')
-        t_mask = self._interpolate_batch(t_mask.float(), mode='nearest')
+        
+        # 确保 mask 类型正确
+        if t_mask.dtype != torch.float32:
+             t_mask = t_mask.float()
         
         pred_raw = self.model(x)
         pred = torch.clamp(pred_raw, 0.0, 1.0)
@@ -121,9 +123,9 @@ class MeteoMambaModule(l.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         _, x, y, t_mask, _ = batch
-        x = self._interpolate_batch(x, mode='bilinear')
-        y = self._interpolate_batch(y, mode='bilinear')
-        t_mask = self._interpolate_batch(t_mask.float(), mode='nearest')
+        
+        if t_mask.dtype != torch.float32:
+             t_mask = t_mask.float()
         
         pred_raw = self.model(x)
         pred = torch.clamp(pred_raw, 0.0, 1.0)
@@ -146,8 +148,6 @@ class MeteoMambaModule(l.LightningModule):
 
     def test_step(self, batch, batch_idx):
         _, x, y, t_mask, _ = batch
-        x = self._interpolate_batch(x, mode='bilinear')
-        y = self._interpolate_batch(y, mode='bilinear')
         
         pred_raw = self.model(x)
         pred = torch.clamp(pred_raw, 0.0, 1.0)
@@ -155,5 +155,4 @@ class MeteoMambaModule(l.LightningModule):
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         _, x, _ = batch
-        x = self._interpolate_batch(x, mode='bilinear')
         return torch.clamp(self.model(x), 0.0, 1.0)
