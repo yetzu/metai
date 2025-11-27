@@ -36,7 +36,8 @@ class WeightedL1Loss(nn.Module):
         
         # 对应区间权重 (参考比赛表格):
         # [背景, 0.1-0.9, 1.0-1.9, 2.0-4.9, 5.0-7.9, >=8.0]
-        weights_val = [zero_rain_weight, 0.1, 0.1, 0.2, 0.25, 0.35]
+        # weights_val = [zero_rain_weight, 0.1, 0.1, 0.2, 0.25, 0.35]
+        weights_val = [zero_rain_weight, 1.0, 2.0, 5.0, 10.0, 20.0]
         
         # === 2. 内部预处理 (使用全局 MM_MAX) ===
         # 将物理阈值转换为模型输出的归一化空间 [0, 1]

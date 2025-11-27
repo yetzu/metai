@@ -19,7 +19,7 @@ MODE=$1
 
 # [注意] 如果是单卡 A800，请改为 DEVICES="[0]"
 # 如果是多卡，保持 "[0,1,2,3]"，Batch Size 会自动乘以卡数 (Global Batch Size)
-DEVICES="[0,1,2,3]" 
+DEVICES="[1,2,3]" 
 DATA_PATH="data/samples.jsonl"
 SAVE_DIR="./output/meteo_mamba_a800" # 修改输出目录以免覆盖旧实验
 
@@ -31,14 +31,14 @@ case $MODE in
         python run/train_scwds_mamba.py fit \
             --seed_everything 42 \
             --trainer.default_root_dir $SAVE_DIR \
-            --trainer.accelerator gpu \
+            --trainer.accelerator cuda \
             --trainer.devices $DEVICES \
             --trainer.strategy ddp \
             --trainer.precision bf16-mixed \
             --trainer.max_epochs 50 \
             --trainer.accumulate_grad_batches 1 \
-            --trainer.log_every_n_steps 10 \
-            --trainer.accumulate_grad_batches 16
+            --trainer.log_every_n_steps 50 \
+            --trainer.accumulate_grad_batches 4 \
             --trainer.gradient_clip_val 1.0 \
             --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
             --trainer.callbacks.monitor "val_score" \
@@ -47,6 +47,8 @@ case $MODE in
             --trainer.callbacks.save_last true \
             --trainer.callbacks.filename "{epoch:02d}-{val_score:.4f}" \
             --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
+            --trainer.callbacks.monitor "val_score" \
+            --trainer.callbacks.mode "max" \
             --trainer.callbacks.patience 30 \
             --model.in_shape "[10, 31, 256, 256]" \
             --model.aft_seq_length 20 \
@@ -54,13 +56,15 @@ case $MODE in
             --model.hid_T 256 \
             --model.N_S 4 \
             --model.N_T 6 \
-            --model.use_curriculum_learning false \
             --model.mamba_d_state 16 \
             --model.mamba_d_conv 4 \
             --model.mamba_expand 2 \
+            --model.use_curriculum_learning false \
+            --model.loss_weight_l1 1.0 \
+            --model.loss_weight_gdl 5.0 \
             --data.data_path $DATA_PATH \
-            --data.batch_size 1 \
-            --data.num_workers 8
+            --data.batch_size 4 \
+            --data.num_workers 16
         ;;
         
     "test")
@@ -83,7 +87,8 @@ case $MODE in
             --ckpt_path "$CKPT_PATH" \
             --save_dir "$SAVE_DIR/vis_check" \
             --num_samples 10 \
-            --data_path "$DATA_PATH"
+            --data_path "$DATA_PATH" \
+            --accelerator cuda:0
         ;;
         
     *)

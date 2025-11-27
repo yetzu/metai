@@ -39,4 +39,6 @@ tensorboard --logdir ./output/simvp
 watch -n 1 nvidia-smi
 /home/dataset-assist-0/code/submit/output/CP2025000081.zip
 
+tensorboard --logdir ./output/meteo_mamba_a800 --port 6006
+
 nohup bash run.scwds.mamba.sh train > train_log.txt 2>&1 &
