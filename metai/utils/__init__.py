@@ -8,6 +8,7 @@ from .met_var import (
     MetNwp,
     MetGis,
     MetVar,
+    MetVarType,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     'MetNwp',
     'MetGis',
     'MetVar',
+    'MetVarType',
 ]

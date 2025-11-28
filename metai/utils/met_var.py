@@ -160,3 +160,5 @@ class MetVar:
     NWP = _MetVarAttr(MetNwp, "NWP")
     GIS = _MetVarAttr(MetGis, "GIS")
 
+MetVarType = Union[MetLabel, MetRadar, MetNwp]
+
