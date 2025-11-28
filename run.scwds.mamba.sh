@@ -29,6 +29,7 @@ case $MODE in
         echo "🚀 [4x A800] 开始训练 MeteoMamba 基座模型 (BF16 Mixed)..."
         echo "--------------------------------------------------------"
         python run/train_scwds_mamba.py fit \
+            --ckpt_path "./output/meteo_mamba_a800/lightning_logs/version_0/checkpoints/last.ckpt" \
             --seed_everything 42 \
             --trainer.default_root_dir $SAVE_DIR \
             --trainer.accelerator cuda \
