@@ -6,6 +6,7 @@ from metai.utils import MetLabel
 from metai.model.core import get_optim_scheduler, timm_schedulers
 from .model import MeteoMamba
 from .loss import HybridLoss
+from .metrices import MetScore  # [新增] 引入评分计算模块
 
 class MeteoMambaModule(l.LightningModule):
     def __init__(
@@ -54,7 +55,6 @@ class MeteoMambaModule(l.LightningModule):
         # 说明：原始数据 RA 存储值放大了 10 倍 (例如物理量 30mm 存储为 300)
         # Dataset 使用 MetLabel.RA.max (300) 进行归一化
         # 因此，归一化数值 1.0 对应的物理值为 300 / 10 = 30.0 mm
-        # 注意：此处假设 loss.py 中的 MM_MAX 默认值 (30.0) 与此计算值一致
         self.ra_storage_factor = 10.0
         self.mm_max = float(MetLabel.RA.max) / self.ra_storage_factor  # 结果为 30.0
         
@@ -78,11 +78,9 @@ class MeteoMambaModule(l.LightningModule):
         
         self.resize_shape = (in_shape[2], in_shape[3])
         
-        # 验证指标相关 (CSI Thresholds)
-        self.val_thresholds = [0.1, 1.0, 2.0, 5.0, 8.0] 
-        weights_raw = [0.1, 0.1, 0.2, 0.25, 0.35]
-        total_w = sum(weights_raw)
-        self.val_weights = [w / total_w for w in weights_raw]
+        # [修改] 使用 MetScore 进行验证指标计算
+        # MetScore 默认 data_max=30.0，与 self.mm_max 一致，直接初始化即可
+        self.valid_scorer = MetScore()
 
     def configure_optimizers(self):
         optimizer, scheduler, by_epoch = get_optim_scheduler(
@@ -132,23 +130,16 @@ class MeteoMambaModule(l.LightningModule):
         
         loss, _ = self.criterion(pred, y, mask=t_mask)
         
-        # [Critical] 使用正确的物理极值 (30.0) 进行反归一化
-        pred_mm = pred * self.mm_max
-        target_mm = y * self.mm_max
-        weighted_csi_sum = 0.0
-        valid_mask = t_mask > 0.5
-        
-        for i, threshold in enumerate(self.val_thresholds):
-            hits = ((pred_mm >= threshold) & (target_mm >= threshold) & valid_mask).float().sum()
-            union = (((pred_mm >= threshold) | (target_mm >= threshold)) & valid_mask).float().sum()
-            csi = hits / (union + 1e-6)
-            weighted_csi_sum += csi * self.val_weights[i]
+        # [修改] 调用 MetScore 计算综合评分
+        # MetScore.forward 返回字典 {'total_score': ..., 'score_time': ..., ...}
+        metric_results = self.valid_scorer(pred, y, mask=t_mask)
+        val_score = metric_results['total_score']
 
         self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True, batch_size=x.size(0))
-        self.log('val_score', weighted_csi_sum, on_epoch=True, sync_dist=True, prog_bar=True, batch_size=x.size(0))
+        self.log('val_score', val_score, on_epoch=True, sync_dist=True, prog_bar=True, batch_size=x.size(0))
 
     def test_step(self, batch, batch_idx):
-        _, x, y, _, t_mask = batch
+        _, x, y, _, _ = batch
         
         pred_raw = self.model(x)
         pred = torch.clamp(pred_raw, 0.0, 1.0)
