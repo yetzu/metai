@@ -181,7 +181,7 @@ class ScwdsDataset(Dataset):
                 input_mask_np = self._resize_array(input_mask_uint8, mode=FAST_MODE).astype(bool)
         
         # 注意：返回顺序需与 Collate Fn 对应
-        return metadata, input_np, target_np, target_mask_np, input_mask_np
+        return metadata, input_np, target_np, input_mask_np, target_mask_np
                         
     def _load_samples_from_jsonl(self, file_path: str) -> List[Dict[str, Any]]:
         """从 JSONL 文件加载样本列表索引。"""
@@ -299,23 +299,22 @@ class ScwdsDataModule(LightningDataModule):
         metadata_batch = []
         input_tensors = []
         target_tensors = []
-        target_mask_tensors = []
         input_mask_tensors = []
+        target_mask_tensors = []
 
-        for metadata, input_np, target_np, target_mask_np, input_mask_np in batch:
+        for metadata, input_np, target_np, input_mask_np, target_mask_np in batch:
             metadata_batch.append(metadata)
             input_tensors.append(torch.as_tensor(input_np, dtype=torch.float32))
             target_tensors.append(torch.as_tensor(target_np, dtype=torch.float32))
-            target_mask_tensors.append(torch.as_tensor(target_mask_np, dtype=torch.bool))
             input_mask_tensors.append(torch.as_tensor(input_mask_np, dtype=torch.bool))
+            target_mask_tensors.append(torch.as_tensor(target_mask_np, dtype=torch.bool))
 
-        # stack 默认处理内存连续性，无需额外的 .contiguous()
         input_batch = torch.stack(input_tensors, dim=0)
         target_batch = torch.stack(target_tensors, dim=0)
-        target_mask_batch = torch.stack(target_mask_tensors, dim=0)
         input_mask_batch = torch.stack(input_mask_tensors, dim=0)
+        target_mask_batch = torch.stack(target_mask_tensors, dim=0)
         
-        return metadata_batch, input_batch, target_batch, target_mask_batch, input_mask_batch
+        return metadata_batch, input_batch, target_batch, input_mask_batch, target_mask_batch
 
     def _collate_fn_infer(self, batch):
         """
@@ -325,7 +324,7 @@ class ScwdsDataModule(LightningDataModule):
         input_tensors = []
         input_mask_tensors = []
 
-        for metadata, input_np, _, _, input_mask_np in batch:
+        for metadata, input_np, _, input_mask_np, _ in batch:
             metadata_batch.append(metadata)
             input_tensors.append(torch.as_tensor(input_np, dtype=torch.float32))
             input_mask_tensors.append(torch.as_tensor(input_mask_np, dtype=torch.bool))

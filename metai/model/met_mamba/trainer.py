@@ -105,7 +105,7 @@ class MeteoMambaModule(l.LightningModule):
         return x.view(B, T, C, *self.resize_shape)
 
     def training_step(self, batch, batch_idx):
-        _, x, y, t_mask, _ = batch
+        _, x, y, _, t_mask = batch
         
         # 确保 mask 类型正确
         if t_mask.dtype != torch.float32:
@@ -122,7 +122,7 @@ class MeteoMambaModule(l.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        _, x, y, t_mask, _ = batch
+        _, x, y, _, t_mask = batch
         
         if t_mask.dtype != torch.float32:
              t_mask = t_mask.float()
@@ -147,7 +147,7 @@ class MeteoMambaModule(l.LightningModule):
         self.log('val_score', weighted_csi_sum, on_epoch=True, sync_dist=True, prog_bar=True)
 
     def test_step(self, batch, batch_idx):
-        _, x, y, t_mask, _ = batch
+        _, x, y, _, t_mask = batch
         
         pred_raw = self.model(x)
         pred = torch.clamp(pred_raw, 0.0, 1.0)
