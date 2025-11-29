@@ -47,9 +47,11 @@ class ModelConfig(BaseModel):
     # --- 策略 ---
     use_curriculum_learning: bool = False 
     
-    # --- 损失函数权重 ---
-    loss_weight_l1: float = 1.0  
-    loss_weight_gdl: float = 1.0
+    # --- 损失函数权重 (已同步 loss.py 策略) ---
+    loss_weight_l1: float = 1.0    # MAE 基准权重
+    loss_weight_gdl: float = 10.0  # [修改] 放大以匹配 MAE 量级
+    loss_weight_corr: float = 0.5  # [新增] 相关性损失权重
+    loss_weight_dice: float = 1.0  # [新增] TS/Dice 损失权重
     
     model_config = ConfigDict(protected_namespaces=())
     

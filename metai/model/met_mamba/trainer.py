@@ -33,18 +33,16 @@ class MeteoMambaModule(l.LightningModule):
         # 2. 保存超参数
         self.save_hyperparameters(self.config.to_dict())
         
-        # 3. 初始化模型
-        # 构造模型需要的 4D 输入形状 (T, C, H, W)
-        model_in_shape = (self.config.obs_seq_len, *self.config.in_shape)
-        
+        # 3. 初始化模型 [修改]
         self.model = MeteoMamba(
-            in_shape=model_in_shape,
+            in_shape=self.config.in_shape,      # (C, H, W)
+            in_seq_len=self.config.obs_seq_len, # T_in
+            out_seq_len=self.config.pred_seq_len, # T_out
+            out_channels=1,
             hid_S=self.config.hid_S,
             hid_T=self.config.hid_T,
             N_S=self.config.N_S,
             N_T=self.config.N_T,
-            aft_seq_length=self.config.pred_seq_len,
-            out_channels=1,
             mamba_d_state=self.config.mamba_d_state,
             mamba_d_conv=self.config.mamba_d_conv,
             mamba_expand=self.config.mamba_expand
@@ -53,7 +51,9 @@ class MeteoMambaModule(l.LightningModule):
         # 4. 初始化 Loss
         self.criterion = HybridLoss(
             l1_weight=self.config.loss_weight_l1, 
-            gdl_weight=self.config.loss_weight_gdl
+            gdl_weight=self.config.loss_weight_gdl,
+            corr_weight=self.config.loss_weight_corr,
+            dice_weight=self.config.loss_weight_dice
         )
         
         # 5. 辅助属性
@@ -73,6 +73,7 @@ class MeteoMambaModule(l.LightningModule):
         }
 
     def lr_scheduler_step(self, scheduler, metric):
+        # 兼容 timm scheduler 和标准 PyTorch scheduler
         if any(isinstance(scheduler, sch) for sch in timm_schedulers):
             scheduler.step(epoch=self.current_epoch, metric=metric) # type: ignore
         else:

@@ -1,5 +1,3 @@
-# metai/model/met_mamba/model.py
-
 import torch
 import torch.nn as nn
 from .modules import ConvSC, STMambaBlock, TimeAlignBlock
@@ -82,15 +80,27 @@ class EvolutionNet(nn.Module):
         return x
 
 class MeteoMamba(nn.Module):
-    def __init__(self, in_shape, hid_S=64, hid_T=256, N_S=4, N_T=8, 
-                 spatio_kernel_enc=3, spatio_kernel_dec=3, 
-                 out_channels=None, aft_seq_length=20, 
-                 mamba_d_state=16, mamba_d_conv=4, mamba_expand=2,
+    def __init__(self, 
+                 in_shape,      # (C, H, W)
+                 in_seq_len,    # T_in
+                 out_seq_len,   # T_out
+                 out_channels=1,
+                 hid_S=64, 
+                 hid_T=256, 
+                 N_S=4, 
+                 N_T=8, 
+                 spatio_kernel_enc=3, 
+                 spatio_kernel_dec=3, 
+                 mamba_d_state=16, 
+                 mamba_d_conv=4, 
+                 mamba_expand=2,
                  **kwargs):
         super().__init__()
-        T_in, C, H, W = in_shape
-        self.T_out = aft_seq_length
-        if out_channels is None: out_channels = C
+        
+        # [修改] 解析新的参数结构
+        C, H, W = in_shape
+        T_in = in_seq_len
+        self.T_out = out_seq_len
         self.out_channels = out_channels
         
         mamba_kwargs = {
@@ -156,8 +166,7 @@ class MeteoMamba(nn.Module):
         Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         
         # Residual Learning
-        # [核心修复] 只取最后一帧中对应的 out_channels 进行相加
-        # 防止 31 通道的 last_frame 与 1 通道的 Y_diff 广播成 31 通道
+        # 只取最后一帧中对应的 out_channels 进行相加
         last_frame = x_raw[:, -1:, :self.out_channels, :, :].detach() 
         
         Y = last_frame + Y_diff
