@@ -39,6 +39,7 @@ class ModelConfig(BaseModel):
     warmup_epoch: int = 10 
     weight_decay: float = 0.05 
     momentum: float = 0.9
+    filter_bias_and_bn: bool = True # # [必须添加] 开启后可以保护 Bias 和 LayerNorm 不受不必要的衰减影响
     
     sched: str = "cosine"
     decay_epoch: int = 30 
@@ -47,11 +48,11 @@ class ModelConfig(BaseModel):
     # --- 策略 ---
     use_curriculum_learning: bool = False 
     
-    # --- 损失函数权重 (已同步 loss.py 策略) ---
+    # --- 损失函数权重 ---
     loss_weight_l1: float = 1.0    # MAE 基准权重
-    loss_weight_gdl: float = 10.0  # [修改] 放大以匹配 MAE 量级
-    loss_weight_corr: float = 0.5  # [新增] 相关性损失权重
-    loss_weight_dice: float = 1.0  # [新增] TS/Dice 损失权重
+    loss_weight_gdl: float = 10.0  # 放大以匹配 MAE 量级
+    loss_weight_corr: float = 0.5  # 相关性损失权重
+    loss_weight_dice: float = 1.0  # TS/Dice 损失权重
     
     model_config = ConfigDict(protected_namespaces=())
     

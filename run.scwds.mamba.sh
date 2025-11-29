@@ -26,10 +26,9 @@ SAVE_DIR="./output" # 修改输出目录以免覆盖旧实验
 case $MODE in
     "train")
         echo "--------------------------------------------------------"
-        echo "🚀 [A800] 开始训练 MeteoMamba 基座模型 (BF16 Mixed)..."
+        echo "🚀 [A800] 开始训练 Met Mamba 基座模型 (BF16 Mixed)..."
         echo "--------------------------------------------------------"
         python run/train_scwds_mamba.py fit \
-            --ckpt_path "./output/meteo_mamba_a800/lightning_logs/version_0/checkpoints/last.ckpt" \
             --seed_everything 42 \
             --trainer.default_root_dir $SAVE_DIR \
             --trainer.accelerator cuda \
@@ -71,7 +70,7 @@ case $MODE in
         
     "test")
         echo "----------------------------------------"
-        echo "🧪 开始测试 MeteoMamba 基座模型..."
+        echo "🧪 开始测试 Met Mamba 基座模型..."
         echo "----------------------------------------"
         
         # 自动寻找 Checkpoint
