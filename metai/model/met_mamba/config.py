@@ -12,9 +12,10 @@ class ModelConfig(BaseModel):
     save_dir: str = "./output" # 修改输出目录以区分实验
     
     # --- 形状参数 ---
-    # T_in=10 (过去1小时), T_out=20 (未来2小时), C=31 (多通道), H=W=256
-    in_shape: Tuple[int, int, int, int] = (10, 31, 256, 256) 
-    aft_seq_length: int = 20
+    # C=31 (多通道), H=W=256
+    in_shape: Tuple[int, int, int] = (31, 256, 256) 
+    obs_seq_len: int = 10 
+    pred_seq_len: int = 20 
     
     # --- 模型参数 (A800 高性能配置) ---
     # [优化] hid_S 从 64 提升至 128。
