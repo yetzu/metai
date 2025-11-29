@@ -56,7 +56,7 @@ class MetSample:
     """
     气象多模态样本加载器 (MetSample Consumer)。
     
-    功能：
+    特性：
     1. 解析 Sample ID 获取元数据。
     2. 从 LMDB 高效读取稀疏历史观测 (Radar/NWP)。
     3. 计算或读取静态 GIS 嵌入。
