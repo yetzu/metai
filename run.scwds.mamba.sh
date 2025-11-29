@@ -4,7 +4,7 @@
 # 包含: Train (MeteoMamba) -> Test (MeteoMamba Visualization)
 
 export PYTHONPATH=$PYTHONPATH:$(pwd)
-# A800 显存足够，通常不需要过于激进的碎片整理，但保留此项无害
+# A800 显存足够，通常不需要过于激进的碎片整理
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
 export NCCL_P2P_DISABLE=0
 export NCCL_IB_DISABLE=0
@@ -21,12 +21,12 @@ MODE=$1
 # 如果是多卡，保持 "[0,1,2,3]"，Batch Size 会自动乘以卡数 (Global Batch Size)
 DEVICES="[1,2,3]" 
 DATA_PATH="data/samples.jsonl"
-SAVE_DIR="./output/meteo_mamba_a800" # 修改输出目录以免覆盖旧实验
+SAVE_DIR="./output" # 修改输出目录以免覆盖旧实验
 
 case $MODE in
     "train")
         echo "--------------------------------------------------------"
-        echo "🚀 [4x A800] 开始训练 MeteoMamba 基座模型 (BF16 Mixed)..."
+        echo "🚀 [A800] 开始训练 MeteoMamba 基座模型 (BF16 Mixed)..."
         echo "--------------------------------------------------------"
         python run/train_scwds_mamba.py fit \
             --ckpt_path "./output/meteo_mamba_a800/lightning_logs/version_0/checkpoints/last.ckpt" \
@@ -37,7 +37,6 @@ case $MODE in
             --trainer.strategy ddp \
             --trainer.precision bf16-mixed \
             --trainer.max_epochs 50 \
-            --trainer.accumulate_grad_batches 1 \
             --trainer.log_every_n_steps 50 \
             --trainer.accumulate_grad_batches 4 \
             --trainer.gradient_clip_val 1.0 \
@@ -51,8 +50,9 @@ case $MODE in
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
             --trainer.callbacks.patience 30 \
-            --model.in_shape "[10, 31, 256, 256]" \
-            --model.aft_seq_length 20 \
+            --model.in_shape "[31, 256, 256]" \
+            --model.obs_seq_len 10 \
+            --model.pred_seq_len 20 \
             --model.hid_S 64 \
             --model.hid_T 256 \
             --model.N_S 4 \
@@ -65,7 +65,8 @@ case $MODE in
             --model.loss_weight_gdl 5.0 \
             --data.data_path $DATA_PATH \
             --data.batch_size 4 \
-            --data.num_workers 16
+            --data.num_workers 16 \
+            --data.aft_seq_length 20 
         ;;
         
     "test")
@@ -84,12 +85,16 @@ case $MODE in
         
         echo "Using Checkpoint: $CKPT_PATH"
         
+        # [Update] 这里的参数已更新为匹配 test_scwds_mamba.py 的新接口
         python run/test_scwds_mamba.py \
             --ckpt_path "$CKPT_PATH" \
             --save_dir "$SAVE_DIR/vis_check" \
             --num_samples 10 \
             --data_path "$DATA_PATH" \
-            --accelerator cuda:0
+            --accelerator cuda:0 \
+            --in_shape 31 256 256 \
+            --obs_seq_len 10 \
+            --pred_seq_len 20
         ;;
         
     *)

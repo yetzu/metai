@@ -6,7 +6,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lightning.pytorch.cli import LightningCLI
-from metai.dataset.met_dataloader_scwds import ScwdsDataModule
+from metai.dataset import ScwdsDataModule
 from metai.model.met_mamba import MeteoMambaModule
 
 def main():

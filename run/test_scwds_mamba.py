@@ -9,19 +9,22 @@ import argparse
 import numpy as np
 from datetime import datetime
 
-# 添加项目根目录到Python路径
+# 将项目根目录添加到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 matplotlib.use('Agg')
 
-from metai.dataset.met_dataloader_scwds import ScwdsDataModule
-# [关键] 确保引用正确的模块名
+# [修改] 使用更简洁的包级导入
+from metai.dataset import ScwdsDataModule
 from metai.model.met_mamba.trainer import MeteoMambaModule
+# 引入标准评价指标模块
+from metai.model.met_mamba.metrices import MetScore
 
 # ==========================================
-# Part 0: 辅助工具函数
+# Part 0: 辅助工具函数 (Helper Functions)
 # ==========================================
 
 class TeeLogger:
+    """双向日志记录器：同时输出到控制台和文件"""
     def __init__(self, log_file_path):
         self.log_file = open(log_file_path, 'w', encoding='utf-8')
         self.console = sys.stdout
@@ -37,6 +40,7 @@ def set_logger(path): global _logger; _logger = TeeLogger(path); sys.stdout = _l
 def restore_stdout(): global _logger; sys.stdout = _logger.console if _logger else sys.stdout; _logger = None
 
 def find_best_ckpt(save_dir: str) -> str:
+    """自动查找最佳检查点文件"""
     best = os.path.join(save_dir, 'best.ckpt')
     if os.path.exists(best): return best
     last = os.path.join(save_dir, 'last.ckpt')
@@ -49,6 +53,7 @@ def find_best_ckpt(save_dir: str) -> str:
     return all_cpts[-1]
 
 def get_checkpoint_info(ckpt_path: str):
+    """解析检查点文件信息"""
     try:
         ckpt = torch.load(ckpt_path, map_location='cpu')
         epoch = ckpt.get('epoch', None)
@@ -59,6 +64,7 @@ def get_checkpoint_info(ckpt_path: str):
         return {'error': str(e)}
 
 def print_checkpoint_info(ckpt_info: dict):
+    """打印检查点详细信息"""
     if 'error' in ckpt_info: print(f"[WARNING] {ckpt_info['error']}"); return
     print("=" * 80)
     print(f"[INFO] Loaded Checkpoint: {ckpt_info['ckpt_name']}")
@@ -67,117 +73,60 @@ def print_checkpoint_info(ckpt_info: dict):
     hparams = ckpt_info.get('hparams', {})
     if hparams:
         print(f"  In Shape: {hparams.get('in_shape', 'N/A')}")
-        print(f"  Out Seq Length: {hparams.get('aft_seq_length', 'N/A')}")
+        print(f"  Out Seq Length: {hparams.get('pred_seq_len', 'N/A')}")
     print("=" * 80)
 
-# ==========================================
-# Part 1: Metric Config
-# ==========================================
-class MetricConfig:
-    MM_MAX = 30.0
-    THRESHOLD_NOISE = 0.05 
-    LEVEL_EDGES = np.array([0.0, 0.1, 1.0, 2.0, 5.0, 8.0, np.inf], dtype=np.float32)
-    _raw_level_weights = np.array([0.1, 0.1, 0.1, 0.2, 0.2, 0.3], dtype=np.float32)
-    LEVEL_WEIGHTS = _raw_level_weights / _raw_level_weights.sum()
-    TIME_WEIGHTS_DICT = {
-        0: 0.0075, 1: 0.02, 2: 0.03, 3: 0.04, 4: 0.05,
-        5: 0.06, 6: 0.07, 7: 0.08, 8: 0.09, 9: 0.1,
-        10: 0.09, 11: 0.08, 12: 0.07, 13: 0.06, 14: 0.05,
-        15: 0.04, 16: 0.03, 17: 0.02, 18: 0.0075, 19: 0.005
-    }
-    @staticmethod
-    def get_time_weights(T):
-        if T == 20: return np.array([MetricConfig.TIME_WEIGHTS_DICT[t] for t in range(T)], dtype=np.float32)
-        else: return np.ones(T, dtype=np.float32) / T
+def denormalize(data_norm):
+    """
+    反归一化：将对数空间 [0, 1] 还原为物理空间 [0, 30] mm
+    公式: mm = exp(norm * log(31)) - 1
+    """
+    log_factor = np.log(30.0 + 1)
+    if isinstance(data_norm, torch.Tensor):
+        return torch.expm1(data_norm * log_factor)
+    else:
+        return np.expm1(data_norm * log_factor)
 
 # ==========================================
-# Part 2: Metrics Calculation
+# Part 1: 可视化 (Visualization)
 # ==========================================
-def calc_seq_metrics(true_seq, pred_seq, verbose=True):
-    T, H, W = true_seq.shape
-    pred_clean = pred_seq.copy()
-    pred_clean[pred_clean < (MetricConfig.THRESHOLD_NOISE / MetricConfig.MM_MAX)] = 0.0
-    
-    tru_mm = np.clip(true_seq, 0, None) * MetricConfig.MM_MAX
-    prd_mm = np.clip(pred_clean, 0, None) * MetricConfig.MM_MAX
-    time_weights = MetricConfig.get_time_weights(T)
-    
-    score_list = []
-    corr_sum = 0.0
-    ts_mean_levels = np.zeros(len(MetricConfig.LEVEL_WEIGHTS))
-    mae_mm_mean_levels = np.zeros(len(MetricConfig.LEVEL_WEIGHTS))
-    
-    if verbose:
-        print(f"True Stats (mm): Max={np.max(tru_mm):.2f}, Mean={np.mean(tru_mm):.2f}")
-        print(f"Pred Stats (mm): Max={np.max(prd_mm):.2f}, Mean={np.mean(prd_mm):.2f}")
-        print("-" * 90)
-        print(f"{'T':<3} | {'Corr(R)':<9} | {'TS_w_sum':<9} | {'Score_k':<9} | {'W_time':<8}")
-        print("-" * 90)
-
-    for t in range(T):
-        tf, pf = tru_mm[t].flatten(), prd_mm[t].flatten()
-        abs_err = np.abs(pf - tf)
-        mask = (tf>0)|(pf>0)
-        R_k = np.corrcoef(tf[mask], pf[mask])[0,1] if mask.sum()>1 else 0.0
-        if np.isnan(R_k): R_k=0.0
-        R_k = np.clip(R_k, -1, 1)
-        corr_sum += R_k
-        term_corr = np.sqrt(np.exp(R_k - 1.0))
-        
-        w_sum_metrics = 0.0
-        for i in range(len(MetricConfig.LEVEL_WEIGHTS)):
-            l, h = MetricConfig.LEVEL_EDGES[i], MetricConfig.LEVEL_EDGES[i+1]
-            w_i = MetricConfig.LEVEL_WEIGHTS[i]
-            t_bin, p_bin = (tf>=l)&(tf<h), (pf>=l)&(pf<h)
-            tp, fn, fp = (t_bin&p_bin).sum(), (t_bin&~p_bin).sum(), (~t_bin&p_bin).sum()
-            ts = tp / (tp+fn+fp+1e-8) if (tp+fn+fp)>0 else 1.0
-            mask_eval = t_bin | p_bin
-            mae = np.mean(abs_err[mask_eval]) if mask_eval.sum()>0 else 0.0
-            ts_mean_levels[i] += ts / T
-            mae_mm_mean_levels[i] += mae / T
-            w_sum_metrics += w_i * ts * np.sqrt(np.exp(-mae/100.0))
-            
-        Score_k = term_corr * w_sum_metrics
-        score_list.append(Score_k)
-        if verbose: print(f"{t:<3} | {R_k:<9.4f} | {w_sum_metrics:<9.4f} | {Score_k:<9.4f} | {time_weights[t]:<8.4f}")
-        
-    final = (np.array(score_list) * time_weights).sum()
-    print("-" * 90)
-    print(f"[METRIC] TS_mean  (Levels): {', '.join([f'{v:.3f}' for v in ts_mean_levels])}")
-    print(f"[METRIC] MAE_mean (Levels): {', '.join([f'{v:.3f}' for v in mae_mm_mean_levels])}")
-    print(f"[METRIC] Corr_mean: {corr_sum / T:.4f}")
-    print(f"[METRIC] Final_Weighted_Score: {final:.6f}")
-    print("-" * 90)
-    return {"final_score": final, "pred_clean": pred_clean}
-
-# ==========================================
-# Part 3: Visualization
-# ==========================================
-def plot_seq_visualization(obs_seq, true_seq, pred_seq, out_path, vmax=1.0):
+def plot_seq_visualization(obs_seq, true_seq, pred_seq, out_path, vmax=30.0):
+    """
+    绘制时间序列对比图：Obs, GT, Pred, Diff
+    注意：输入数据应为物理值 (mm)，vmax 默认为 30.0 mm
+    """
     T = true_seq.shape[0]
     rows, cols = 4, T
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.5, rows * 1.5), constrained_layout=True)
     if T == 1: axes = axes[:, np.newaxis]
+    
+    # 统一颜色映射单位 (mm)
+    cmap_rain = 'turbo' 
+    
     for t in range(T):
+        # 第0行: 观测 (Observation / Context)
         if t < obs_seq.shape[0]:
-            axes[0, t].imshow(obs_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
+            im = axes[0, t].imshow(obs_seq[t], cmap=cmap_rain, vmin=0.0, vmax=vmax)
             axes[0, t].set_title(f'In-{t}', fontsize=6)
         else:
             axes[0, t].imshow(np.zeros_like(true_seq[0]), cmap='gray', vmin=0, vmax=1)
         axes[0, t].axis('off')
-        if t == 0: axes[0, t].set_ylabel('Obs', fontsize=8)
+        if t == 0: axes[0, t].set_ylabel('Obs (mm)', fontsize=8)
         
-        axes[1, t].imshow(true_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
+        # 第1行: 真值 (Ground Truth)
+        axes[1, t].imshow(true_seq[t], cmap=cmap_rain, vmin=0.0, vmax=vmax)
         axes[1, t].axis('off')
-        if t == 0: axes[1, t].set_ylabel('GT', fontsize=8)
+        if t == 0: axes[1, t].set_ylabel('GT (mm)', fontsize=8)
         axes[1, t].set_title(f'T+{t+1}', fontsize=6)
         
-        axes[2, t].imshow(pred_seq[t], cmap='turbo', vmin=0.0, vmax=vmax)
+        # 第2行: 预测 (Prediction)
+        axes[2, t].imshow(pred_seq[t], cmap=cmap_rain, vmin=0.0, vmax=vmax)
         axes[2, t].axis('off')
-        if t == 0: axes[2, t].set_ylabel('Pred', fontsize=8)
+        if t == 0: axes[2, t].set_ylabel('Pred (mm)', fontsize=8)
         
+        # 第3行: 差异 (Difference) (范围: -15mm 到 +15mm)
         diff = true_seq[t] - pred_seq[t]
-        axes[3, t].imshow(diff, cmap='bwr', vmin=-0.5, vmax=0.5)
+        axes[3, t].imshow(diff, cmap='bwr', vmin=-15.0, vmax=15.0)
         axes[3, t].axis('off')
         if t == 0: axes[3, t].set_ylabel('Diff', fontsize=8)
 
@@ -186,36 +135,70 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, out_path, vmax=1.0):
     plt.close(fig)
 
 # ==========================================
-# Part 4: Main
+# Part 2: 主处理逻辑 (Main Processing)
 # ==========================================
-def render(obs_seq, true_seq, pred_seq, out_path):
-    # [关键修复] 统一处理维度
-    def to_numpy_ch(x, ch=0):
-        if isinstance(x, torch.Tensor): x = x.detach().cpu().numpy()
-        
-        # 1. 移除 Batch 维度 (B=1) -> (T, C, H, W)
-        if x.ndim == 5: x = x[0]
-            
-        # 2. 提取单通道 -> (T, H, W)
-        if x.ndim == 4: x = x[:, ch]
-            
-        return x
-
-    obs = to_numpy_ch(obs_seq) 
-    tru = to_numpy_ch(true_seq)
-    prd = to_numpy_ch(pred_seq)
+def process_batch(scorer, obs_tensor, true_tensor, pred_tensor, out_path):
+    """
+    计算评价指标并绘制图像 (使用物理降水值)
+    """
     
-    print(f"Processing: {os.path.basename(out_path)}")
-    metrics = calc_seq_metrics(tru, prd, verbose=True)
-    plot_seq_visualization(obs, tru, metrics['pred_clean'], out_path)
-    return metrics['final_score']
+    # 1. 计算指标 (Score)
+    # MetScore 内部会自动处理 Log 反归一化，所以传入 normalized tensor 即可
+    with torch.no_grad():
+        score_dict = scorer(pred_tensor, true_tensor)
+        
+    final_score = score_dict['total_score'].item()
+    
+    # 打印详细评价指标
+    r_time = score_dict['r_time'].cpu().numpy()
+    score_time = score_dict['score_time'].cpu().numpy()
+    
+    print("-" * 60)
+    print(f"{'T':<3} | {'Corr(R)':<10} | {'Score_k':<10}")
+    print("-" * 60)
+    for t in range(len(r_time)):
+        print(f"{t:<3} | {r_time[t]:<10.4f} | {score_time[t]:<10.4f}")
+    print("-" * 60)
+    print(f"[METRIC] Final Weighted Score: {final_score:.6f}")
+    print("-" * 60)
+
+    # 2. 准备可视化数据 (转换为物理值 mm)
+    def to_numpy_ch_mm(x, ch=0):
+        # 取出数据并转换为 Numpy
+        if isinstance(x, torch.Tensor): x = x.detach().cpu().numpy()
+        if x.ndim == 5: x = x[0] # (1, T, C, H, W) -> (T, C, H, W)
+        if x.ndim == 4: x = x[:, ch] # (T, C, H, W) -> (T, H, W)
+        
+        # [关键] 反归一化：从对数归一化转换回物理 mm
+        return denormalize(x)
+
+    # 提取第0通道 (RA)，并还原为 mm
+    obs_mm = to_numpy_ch_mm(obs_tensor) 
+    true_mm = to_numpy_ch_mm(true_tensor)
+    pred_mm = to_numpy_ch_mm(pred_tensor)
+    
+    print(f"Plotting (Physical mm): {os.path.basename(out_path)}")
+    print(f"  Max Rain: GT={true_mm.max():.2f}mm, Pred={pred_mm.max():.2f}mm")
+    
+    # 绘图时 vmax 设为 30.0 mm (或根据数据动态调整)
+    plot_seq_visualization(obs_mm, true_mm, pred_mm, out_path, vmax=30.0)
+    
+    return final_score
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ckpt_path', type=str, default=None)
     parser.add_argument('--save_dir', type=str, default='output/meteo_mamba')
     parser.add_argument('--data_path', type=str, default='data/samples.jsonl')
-    parser.add_argument('--in_shape', type=int, nargs=4, default=[10, 31, 256, 256])
+    
+    # in_shape 改为 (C, H, W) 三个整数，与 config.py 保持一致
+    parser.add_argument('--in_shape', type=int, nargs=3, default=[31, 256, 256], 
+                        help='Input shape (C, H, W) without batch or time dim')
+    
+    # 显式添加序列长度参数
+    parser.add_argument('--obs_seq_len', type=int, default=10, help='Observation sequence length')
+    parser.add_argument('--pred_seq_len', type=int, default=20, help='Prediction sequence length')
+    
     parser.add_argument('--num_samples', type=int, default=10)
     parser.add_argument('--accelerator', type=str, default='cuda')
     args = parser.parse_args()
@@ -238,18 +221,35 @@ def main():
     
     print(f"[INFO] Starting Test on {device}")
     print_checkpoint_info(ckpt_info)
-    print(f"[INFO] Input Shape: {args.in_shape}")
-    print(f"[INFO] Metric MM_MAX: {MetricConfig.MM_MAX}")
-    print(f"[INFO] 可视化结果将保存到: {out_dir}")
+    print(f"[INFO] Input Shape (C, H, W): {args.in_shape}")
+    print(f"[INFO] Seq Lengths: Obs={args.obs_seq_len}, Pred={args.pred_seq_len}")
+    print(f"[INFO] Visualization results will be saved to: {out_dir}")
     
+    # 1. 加载模型
     try:
-        model = MeteoMambaModule.load_from_checkpoint(args.ckpt_path).to(device).eval()
+        module = MeteoMambaModule.load_from_checkpoint(args.ckpt_path)
+        module.eval()
+        module.to(device)
+        model = module.model
     except Exception as e:
-        print(f"[ERROR] 模型加载失败: {e}")
+        print(f"[ERROR] Failed to load model: {e}")
         return
     
-    resize_shape = (args.in_shape[2], args.in_shape[3])
-    dm = ScwdsDataModule(data_path=args.data_path, resize_shape=resize_shape, batch_size=1, num_workers=4)
+    # 2. 初始化评分器 (use_log_norm=True)
+    scorer = MetScore(use_log_norm=True).to(device)
+    print(f"[INFO] MetScore initialized (use_log_norm=True)")
+
+    # 3. 加载数据
+    # resize_shape 取 in_shape 的后两维 (H, W)，与 trainer.py 逻辑一致
+    resize_shape = (args.in_shape[1], args.in_shape[2])
+    
+    dm = ScwdsDataModule(
+        data_path=args.data_path, 
+        resize_shape=resize_shape, 
+        batch_size=1, 
+        num_workers=4,
+        aft_seq_length=args.pred_seq_len  # 确保 DataModule 知道预测长度
+    )
     dm.setup('test')
     
     scores = []
@@ -260,17 +260,13 @@ def main():
                 break
 
             batch_device = [x.to(device) if isinstance(x, torch.Tensor) else x for x in batch]
+            _, x, y, _, t_mask = batch_device
             
-            if hasattr(model, 'test_step') and callable(getattr(model, 'test_step')):
-                 outputs = model.test_step(batch_device, bidx)
-            else:
-                 _, x, y, _, _ = batch_device
-                 logits = model.model(x)
-                 pred = torch.clamp(torch.sigmoid(logits), 0.0, 1.0)
-                 outputs = {'inputs': x, 'trues': y, 'preds': pred}
-
+            pred_raw = model(x)
+            pred = torch.clamp(pred_raw, 0.0, 1.0)
+            
             save_path = os.path.join(out_dir, f'sample_{bidx:03d}.png')
-            s = render(outputs['inputs'], outputs['trues'], outputs['preds'], save_path)
+            s = process_batch(scorer, x, y, pred, save_path)
             scores.append(s)
             
     if len(scores) > 0:
