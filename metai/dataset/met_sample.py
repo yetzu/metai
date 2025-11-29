@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import logging
 from dataclasses import dataclass, field
-from typing import List, NamedTuple, Optional, Dict, Union, Tuple, Any
+from typing import List, NamedTuple, Optional, Dict, Union, Tuple, Any, cast
 from datetime import datetime, timedelta
 
 # 引入项目配置与枚举
@@ -95,7 +95,7 @@ class MetSample:
     
     # --- 内部状态 (无需手动初始化) ---
     _lmdb_env: Optional[lmdb.Environment] = field(default=None, init=False, repr=False)
-    _sample_parts: Dict[str, str] = field(default_factory=dict, init=False, repr=False)
+    _sample_parts: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _gis_cache: Dict[str, np.ndarray] = field(default_factory=dict, init=False, repr=False)
     _external_env: bool = field(default=False, init=False, repr=False) # 标记是否使用了外部传入的 env
 
@@ -107,7 +107,7 @@ class MetSample:
 
         # 2. 确定 LMDB 根路径
         if self.lmdb_root is None:
-            self.lmdb_root = getattr(self.met_config, 'lmdb_root_path', "/data/zjobs/LMDB")
+            self.lmdb_root = str(getattr(self.met_config, 'lmdb_root_path', "/data/zjobs/LMDB"))
 
         # 3. 解析 Sample ID
         self._parse_sample_id()
@@ -164,28 +164,28 @@ class MetSample:
     # ==============================================================================
 
     @property
-    def date_fmt(self) -> str: return getattr(self.met_config, 'file_date_format', '%m%d-%H%M')
+    def date_fmt(self) -> str: return str(getattr(self.met_config, 'file_date_format', '%m%d-%H%M'))
     
     @property
-    def nwp_prefix(self) -> str: return getattr(self.met_config, 'nwp_prefix', 'RRA')
+    def nwp_prefix(self) -> str: return str(getattr(self.met_config, 'nwp_prefix', 'RRA'))
     
     @property
-    def gis_data_path(self) -> str: return getattr(self.met_config, 'gis_data_path', '/data/zjobs/GIS')
+    def gis_data_path(self) -> str: return str(getattr(self.met_config, 'gis_data_path', '/data/zjobs/GIS'))
     
     @property
     def dataset_dir_name(self) -> str: return "TrainSet" if self.is_train else self.testset_name
 
     # ID 快捷属性
     @property
-    def case_id(self) -> str: return self._sample_parts.get('case_id', '')
+    def case_id(self) -> str: return str(self._sample_parts.get('case_id', ''))
     @property
-    def region_id(self) -> str: return self._sample_parts.get('region_id', '')
+    def region_id(self) -> str: return str(self._sample_parts.get('region_id', ''))
     @property
-    def task_id(self) -> str: return self._sample_parts.get('task_id', '')
+    def task_id(self) -> str: return str(self._sample_parts.get('task_id', ''))
     @property
-    def station_id(self) -> str: return self._sample_parts.get('station_id', '')
+    def station_id(self) -> str: return str(self._sample_parts.get('station_id', ''))
     @property
-    def radar_type(self) -> str: return self._sample_parts.get('radar_type', '')
+    def radar_type(self) -> str: return str(self._sample_parts.get('radar_type', ''))
 
     @property
     def nwp_forcing_channels(self) -> List[ChannelType]:
@@ -244,7 +244,8 @@ class MetSample:
     def _get_env(self) -> lmdb.Environment:
         """惰性加载 LMDB 环境。"""
         if self._lmdb_env is None:
-            db_path = os.path.join(self.lmdb_root, f"{self.region_id}.lmdb")
+            # [Fix] Ensure region_id and lmdb_root are strings for path join
+            db_path = os.path.join(str(self.lmdb_root), f"{self.region_id}.lmdb")
             if self.verbose:
                 print(f"[MetSample] Opening LMDB: {db_path}")
             
@@ -252,6 +253,10 @@ class MetSample:
             self._lmdb_env = lmdb.open(
                 db_path, readonly=True, lock=False, readahead=False, meminit=False
             )
+        
+        if self._lmdb_env is None:
+            raise RuntimeError(f"Failed to open LMDB environment at {self.lmdb_root}")
+
         return self._lmdb_env
 
     def _read_from_lmdb(self, txn: lmdb.Transaction, key: bytes) -> Optional[np.ndarray]:
@@ -262,7 +267,9 @@ class MetSample:
             np.ndarray: 数据数组，如果 Key 不存在或出错则返回 None。
         """
         try:
-            buf = txn.get(key)
+            # lmdb 在 Python3 默认返回 bytes，但 stub 定义较为宽泛，cast 是最安全的消除警告方式
+            buf = cast(Optional[bytes], txn.get(key))
+            
             if buf is None:
                 if self.verbose: 
                     print(f"❌ [MISSING] {key.decode('ascii', errors='ignore')}")
@@ -317,6 +324,7 @@ class MetSample:
             # 2. 静态文件 (DEM/LAT/LON)
             elif channel in [MetGis.LAT, MetGis.LON, MetGis.DEM]:
                 filename = f"{channel.name.lower()}.npy"
+                # [Fix] Ensure self.gis_data_path is a string
                 path = os.path.join(self.gis_data_path, self.station_id, filename)
                 
                 if os.path.exists(path):

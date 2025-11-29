@@ -1,4 +1,4 @@
-# metai/dataset/met_dataloader_scwds.py
+# metai/dataset/met_dataset_scwds.py
 import os
 import json
 import cv2
@@ -41,9 +41,7 @@ class ScwdsDataset(Dataset):
         self.samples = self._load_samples_from_jsonl(data_path)
         self.is_train = is_train
         
-        # [优化] 初始化阶段检测冗余 (Init-stage Redundancy Check)
-        # MetSample 固定输出 256x256。如果目标尺寸也是 256x256，则强制置为 None 以关闭所有 Resize 逻辑。
-        # MetSample outputs 256x256 by default. If target is also 256x256, disable resize logic completely.
+        # 初始化阶段检测冗余 (Init-stage Redundancy Check)
         if resize_shape == (256, 256):
             self.resize_shape = None
         else:
@@ -59,11 +57,14 @@ class ScwdsDataset(Dataset):
         """
         数组缩放函数 (仅在 resize_shape 非空时调用)
         """
-        # 即使在 _resize_array 内部，保留短路检查也是个好习惯，防止意外调用
         if self.resize_shape is None:
             return data
 
         dsize = (self.resize_shape[1], self.resize_shape[0])
+        
+        # 初始化变量以通过静态类型检查，防止 "possibly unbound" 错误
+        # Initialize variables to pass static type checking
+        T, C, N = 0, 0, 0
         
         if data.ndim == 4: 
             T, C, H, W = data.shape
@@ -95,8 +96,8 @@ class ScwdsDataset(Dataset):
         
         # 1. 创建 MetSample 对象
         sample = MetSample(
-            sample_id=record.get("sample_id"),
-            timestamps=record.get("timestamps"),
+            sample_id=str(record["sample_id"]), 
+            timestamps=record["timestamps"],
             met_config=self.config,
             is_train=self.is_train,
         )
@@ -105,7 +106,10 @@ class ScwdsDataset(Dataset):
         region = sample.region_id
         if region not in self.envs:
             try:
-                lmdb_path = os.path.join(sample.lmdb_root, f"{region}.lmdb")
+                # 显式转换为 str 以满足 os.path.join 类型要求 (Optional[str] -> str)
+                root_path = str(sample.lmdb_root)
+                lmdb_path = os.path.join(root_path, f"{region}.lmdb")
+                
                 self.envs[region] = lmdb.open(
                     lmdb_path, readonly=True, lock=False, readahead=False, meminit=False
                 )
@@ -119,7 +123,6 @@ class ScwdsDataset(Dataset):
         metadata, input_np, target_np, input_mask_np, target_mask_np = sample.to_numpy()
         
         # 4. 执行 Resize (仅当 self.resize_shape 非 None 时执行)
-        # 如果初始化时已确定为 256x256，这里 self.resize_shape 为 None，直接跳过，零开销。
         if self.resize_shape is not None:
             FAST_MODE = cv2.INTER_NEAREST
             input_np = self._resize_array(input_np, mode=FAST_MODE)
