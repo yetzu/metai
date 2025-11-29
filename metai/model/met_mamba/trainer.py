@@ -1,8 +1,11 @@
 import lightning as l
 import torch
+
+# 引入项目配置与工具
+from metai.utils import MetLabel
+from metai.model.core import get_optim_scheduler, timm_schedulers
 from .model import MeteoMamba
 from .loss import HybridLoss
-from metai.model.core import get_optim_scheduler, timm_schedulers
 
 class MeteoMambaModule(l.LightningModule):
     def __init__(
@@ -46,6 +49,15 @@ class MeteoMambaModule(l.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         
+        # [Explicit Physics Management]
+        # 显式定义数据缩放因子与物理极值
+        # 说明：原始数据 RA 存储值放大了 10 倍 (例如物理量 30mm 存储为 300)
+        # Dataset 使用 MetLabel.RA.max (300) 进行归一化
+        # 因此，归一化数值 1.0 对应的物理值为 300 / 10 = 30.0 mm
+        # 注意：此处假设 loss.py 中的 MM_MAX 默认值 (30.0) 与此计算值一致
+        self.ra_storage_factor = 10.0
+        self.mm_max = float(MetLabel.RA.max) / self.ra_storage_factor  # 结果为 30.0
+        
         self.model = MeteoMamba(
             in_shape=in_shape,
             hid_S=hid_S,
@@ -65,7 +77,6 @@ class MeteoMambaModule(l.LightningModule):
         )
         
         self.resize_shape = (in_shape[2], in_shape[3])
-        self.MM_MAX = 30.0
         
         # 验证指标相关 (CSI Thresholds)
         self.val_thresholds = [0.1, 1.0, 2.0, 5.0, 8.0] 
@@ -91,20 +102,9 @@ class MeteoMambaModule(l.LightningModule):
         else:
             scheduler.step(metric) if metric is not None else scheduler.step()
 
-    def _interpolate_batch(self, x, mode='bilinear'):
-        """
-        保留插值函数作为安全检查。
-        如果 Dataset 已经 Resize 好了 (Expected)，这里直接返回。
-        """
-        if self.resize_shape is None: return x
-        if x.shape[-2:] == self.resize_shape: return x
-        
-        B, T, C, H, W = x.shape
-        x = x.view(B * T, C, H, W)
-        x = torch.nn.functional.interpolate(x, size=self.resize_shape, mode='bilinear', align_corners=False)
-        return x.view(B, T, C, *self.resize_shape)
-
     def training_step(self, batch, batch_idx):
+        # [Dataset 顺序]: Meta, Input, Target, Input_Mask, Target_Mask
+        # 解包顺序修正：Target Mask 在第 5 位 (index 4)
         _, x, y, _, t_mask = batch
         
         # 确保 mask 类型正确
@@ -116,9 +116,9 @@ class MeteoMambaModule(l.LightningModule):
         
         loss, loss_dict = self.criterion(pred, y, mask=t_mask)
         
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True)
-        self.log('loss_l1', loss_dict.get('l1', 0), on_step=False, on_epoch=True, prog_bar=False)
-        self.log('loss_gdl', loss_dict.get('gdl', 0), on_step=False, on_epoch=True, prog_bar=False)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=x.size(0))
+        self.log('loss_l1', loss_dict.get('l1', 0), on_step=False, on_epoch=True, prog_bar=False, batch_size=x.size(0))
+        self.log('loss_gdl', loss_dict.get('gdl', 0), on_step=False, on_epoch=True, prog_bar=False, batch_size=x.size(0))
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -132,8 +132,9 @@ class MeteoMambaModule(l.LightningModule):
         
         loss, _ = self.criterion(pred, y, mask=t_mask)
         
-        pred_mm = pred * self.MM_MAX
-        target_mm = y * self.MM_MAX
+        # [Critical] 使用正确的物理极值 (30.0) 进行反归一化
+        pred_mm = pred * self.mm_max
+        target_mm = y * self.mm_max
         weighted_csi_sum = 0.0
         valid_mask = t_mask > 0.5
         
@@ -143,8 +144,8 @@ class MeteoMambaModule(l.LightningModule):
             csi = hits / (union + 1e-6)
             weighted_csi_sum += csi * self.val_weights[i]
 
-        self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True)
-        self.log('val_score', weighted_csi_sum, on_epoch=True, sync_dist=True, prog_bar=True)
+        self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True, batch_size=x.size(0))
+        self.log('val_score', weighted_csi_sum, on_epoch=True, sync_dist=True, prog_bar=True, batch_size=x.size(0))
 
     def test_step(self, batch, batch_idx):
         _, x, y, _, t_mask = batch
