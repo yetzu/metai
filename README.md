@@ -42,3 +42,5 @@ watch -n 1 nvidia-smi
 tensorboard --logdir ./output/meteo_mamba_a800 --port 6006
 
 nohup bash run.scwds.mamba.sh train > train_log.txt 2>&1 &
+
+nohup python prework/run.create_lmdb.py > log.txt 2>&1 &

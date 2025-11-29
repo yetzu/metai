@@ -21,9 +21,6 @@ class MetConfig:
     管理开发环境相关的配置参数
     """
     
-    # 环境配置
-    is_debug: bool = False
-    
     # 路径配置
     root_path: str = "/home/dataset-local/SevereWeather_AI_2025"
     
@@ -39,6 +36,9 @@ class MetConfig:
 
     # 用户ID配置
     user_id: str = 'CP2025000081'
+
+    # LMDB根路径配置
+    lmdb_root_path: str = "/home/dataset-local/SevereWeather_AI_2025/LMDB"
     
     @classmethod
     def from_file(cls, config_path: Union[str, Path]) -> 'MetConfig':
@@ -68,22 +68,16 @@ class MetConfig:
             return cls()
     
     @classmethod
-    def load(cls, config_path: Optional[Union[str, Path]] = None, is_debug: Optional[bool] = None) -> 'MetConfig':
+    def load(cls, config_path: Optional[Union[str, Path]] = None) -> 'MetConfig':
         """
-        加载配置，根据is_debug自动选择配置文件
+        加载配置
         
         Args:
-            config_path: 配置文件路径，如果为None则根据is_debug自动选择
-            is_debug: 调试模式标志，如果为None则从环境变量或默认值获取
-            
+            config_path: 配置文件路径
+     
         Returns:
             MetConfig: 配置对象
         """
-        # 确定is_debug值
-        if is_debug is None:
-            import os
-            is_debug = os.getenv('METAI_DEBUG', 'false').lower() in ('true', '1', 'yes', 'on')
-        
         # 查找配置文件
         if config_path is None:
             config_file = "config.yaml"
@@ -102,12 +96,10 @@ class MetConfig:
         
         if config_path:
             config = cls.from_file(config_path)
-            config.is_debug = is_debug
-            MLOGI(f"从配置文件加载配置: {config_path} (is_debug={is_debug})")
+            MLOGI(f"从配置文件加载配置: {config_path}")
         else:
             config = cls()
-            config.is_debug = is_debug
-            MLOGI(f"使用默认配置 (is_debug={is_debug})")
+            MLOGI(f"使用默认配置")
         
         return config
     
@@ -167,10 +159,6 @@ class MetConfig:
         except ValueError as e:
             errors.append(f"日期格式无效: {e}")
         
-        # 验证布尔值
-        if not isinstance(self.is_debug, bool):
-            errors.append("is_debug 必须是布尔值")
-        
         if errors:
             for error in errors:
                 MLOGE(f"配置验证错误: {error}")
@@ -183,44 +171,39 @@ class MetConfig:
 _config: Optional[MetConfig] = None
 
 
-def get_config(config_path: Optional[Union[str, Path]] = None, is_debug: Optional[bool] = None) -> MetConfig:
+def get_config(config_path: Optional[Union[str, Path]] = None) -> MetConfig:
     """
     获取全局配置实例
     
     Args:
-        config_path: 配置文件路径，如果为None则根据is_debug自动选择
-        is_debug: 调试模式标志，如果为None则从环境变量或默认值获取
+        config_path: 配置文件路径
         
     Returns:
         MetConfig: 配置对象
     """
     global _config
     
-    # 如果指定了is_debug或config_path，重新加载配置
-    if is_debug is not None or config_path is not None or _config is None:
-        _config = MetConfig.load(config_path, is_debug)
+    if config_path is not None or _config is None:
+        _config = MetConfig.load(config_path)
         if not _config.validate():
             MLOGE("配置验证失败，使用默认配置")
             _config = MetConfig()
-            if is_debug is not None:
-                _config.is_debug = is_debug
     
     return _config
 
 
-def reload_config(config_path: Optional[Union[str, Path]] = None, is_debug: Optional[bool] = None) -> MetConfig:
+def reload_config(config_path: Optional[Union[str, Path]] = None) -> MetConfig:
     """
     重新加载配置
     
     Args:
         config_path: 配置文件路径
-        is_debug: 调试模式标志
         
     Returns:
         MetConfig: 新的配置对象
     """
     global _config
-    _config = MetConfig.load(config_path, is_debug)
+    _config = MetConfig.load(config_path)
     return _config
 
 

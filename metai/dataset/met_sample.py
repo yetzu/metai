@@ -1,168 +1,122 @@
 import os
 import math
+import lmdb
+import zlib
+import pickle
+import numpy as np
+import cv2
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import List, Optional, Dict, Union, Tuple
 from datetime import datetime, timedelta
-import numpy as np
-import cv2
+
+# 假设这些工具类在您的环境中可用
 from metai.utils import get_config
 from metai.utils import MetConfig, MetLabel, MetRadar, MetNwp, MetGis, MetVar
 
-# 优化后的通道列表 (精简版)
+# ==============================================================================
+# 通道定义
+# ==============================================================================
 _DEFAULT_CHANNELS: List[Union[MetLabel, MetRadar, MetNwp, MetGis]] = [
-    # --- 1. 标签 (1) ---
     MetLabel.RA, 
-    
-    # --- 2. 雷达 (5个关键层) ---
-    MetRadar.CR, 
-    # MetRadar.CAP20, # 剔除
-    MetRadar.CAP30,   # 保留: 低空核心
-    # MetRadar.CAP40, # 剔除
-    MetRadar.CAP50,   # 保留: 中高空/0度层附近
-    # MetRadar.CAP60, # 剔除
-    # MetRadar.CAP70, # 剔除
-    MetRadar.ET,      # 保留: 对流高度
-    # MetRadar.HBR,   # 剔除: 通常与CR相关
-    MetRadar.VIL,     # 保留: 强天气指示
-    
-    # --- 3. NWP (6个关键变量) ---
-    MetNwp.WS925,     # 保留: 低空急流
-    MetNwp.WS500,     # 保留: 引导气流
-    # MetNwp.WS700,   # 剔除
-    
-    MetNwp.Q850,      # 保留: 低层水汽核心
-    MetNwp.Q700,      # 保留: 中层水汽
-    # MetNwp.Q1000,   # 剔除
-    
-    # 剔除所有 RH (与 Q 重复)
-    # MetNwp.RH1000, MetNwp.RH700, MetNwp.RH500,
-    
-    MetNwp.PWAT,      # 保留: 整层水汽
-    MetNwp.CAPE,      # 保留: 不稳定能量
-    
-    # 剔除次要指数
-    # MetNwp.PE, MetNwp.TdSfc850, MetNwp.LCL, MetNwp.KI,
-    
-    # --- 4. GIS (7个) ---
+    MetRadar.CR, MetRadar.CAP30, MetRadar.CAP50, MetRadar.ET, MetRadar.VIL,
+    MetNwp.WS925, MetNwp.WS500, MetNwp.Q850, MetNwp.Q700, MetNwp.PWAT, MetNwp.CAPE,
     MetGis.LAT, MetGis.LON, MetGis.DEM, 
-    MetGis.MONTH_SIN, MetGis.MONTH_COS, 
-    MetGis.HOUR_SIN, MetGis.HOUR_COS
+    MetGis.MONTH_SIN, MetGis.MONTH_COS, MetGis.HOUR_SIN, MetGis.HOUR_COS
 ]
-
 
 @dataclass
 class MetSample:
     """
-    天气样本数据结构，基于竞赛数据目录结构设计。
-    用于管理单个天气样本的元数据和配置信息。
+    天气样本数据结构
     """
     sample_id: str
     timestamps: List[str]
     met_config: MetConfig
-    is_debug: bool = field(default_factory=lambda: False)
+    
     is_train: bool = field(default_factory=lambda: True)
     test_set: str = field(default_factory=lambda: "TestSet")
     
+    lmdb_root: str = field(default_factory=lambda: "/data/zjobs/LMDB")
+
     channels: List[Union[MetLabel, MetRadar, MetNwp, MetGis]] = field(
         default_factory=lambda: _DEFAULT_CHANNELS.copy()
     )
     channel_size: int = field(default_factory=lambda: len(_DEFAULT_CHANNELS))
     
-    task_mode: str = field(default_factory=lambda: 'precipitation')
-    default_shape: Tuple[int, int] = field(default_factory=lambda: (301, 301))
-    max_timesteps: int = field(default_factory=lambda: 10)
-    # [新增] 明确定义输出帧数为 20
-    out_timesteps: int = field(default_factory=lambda: 20)
+    default_shape: Tuple[int, int] = field(default_factory=lambda: (256, 256))
+    
+    # 序列长度定义
+    obs_seq_len: int = field(default_factory=lambda: 10)
+    pred_seq_len: int = field(default_factory=lambda: 20)
 
-    _gis_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = field(default_factory=dict, init=False, repr=False)
+    _gis_cache: Dict[str, np.ndarray] = field(default_factory=dict, init=False, repr=False)
     _sample_id_parts: Optional[List[str]] = field(default=None, init=False, repr=False)
+    _lmdb_env: Optional[lmdb.Environment] = field(default=None, init=False, repr=False)
+
+    def __del__(self):
+        if self._lmdb_env:
+            try:
+                self._lmdb_env.close()
+            except:
+                pass
 
     @classmethod
     def create(cls, sample_id: str, timestamps: List[str], config: Optional['MetConfig'] = None, **kwargs) -> 'MetSample':
         if config is None:
-            config = get_config(is_debug=kwargs.get('is_debug', False))
-        
-        if 'is_debug' in kwargs:
-            config.is_debug = kwargs['is_debug']
-        else:
-            kwargs['is_debug'] = config.is_debug
-
-        return cls(
-            sample_id=sample_id,
-            timestamps=timestamps,
-            met_config=config,
-            **kwargs
-        )
+            config = get_config()
+        return cls(sample_id=sample_id, timestamps=timestamps, met_config=config, **kwargs)
     
+    # ==============================================================================
+    # 基础属性
+    # ==============================================================================
+
     def _get_sample_id_parts(self) -> List[str]:
         if self._sample_id_parts is None:
             self._sample_id_parts = self.sample_id.split('_')
         return self._sample_id_parts
     
     @cached_property
-    def task_id(self) -> str:
-        return self._get_sample_id_parts()[0]
+    def task_id(self) -> str: return self._get_sample_id_parts()[0]
 
     @cached_property
-    def region_id(self) -> str:
-        return self._get_sample_id_parts()[1]
+    def region_id(self) -> str: return self._get_sample_id_parts()[1]
 
     @cached_property
-    def time_id(self) -> str:
-        return self._get_sample_id_parts()[2]
+    def time_id(self) -> str: return self._get_sample_id_parts()[2]
 
     @cached_property
-    def station_id(self) -> str:
-        return self._get_sample_id_parts()[3]
+    def station_id(self) -> str: return self._get_sample_id_parts()[3]
 
     @cached_property
-    def radar_type(self) -> str:
-        return self._get_sample_id_parts()[4]
+    def radar_type(self) -> str: return self._get_sample_id_parts()[4]
 
     @cached_property
-    def batch_id(self) -> str:
-        return self._get_sample_id_parts()[5]
+    def batch_id(self) -> str: return self._get_sample_id_parts()[5]
 
     @cached_property
     def case_id(self) -> str:
         parts = self._get_sample_id_parts()
         return '_'.join(parts[:4])
 
-    @cached_property
-    def base_path(self) -> str:
-        return os.path.join(
-            self.met_config.root_path,
-            self.task_id,
-            "TrainSet" if self.is_train else self.test_set,
-            self.region_id,
-            self.case_id,
-        )
+    @property
+    def dataset_folder_name(self) -> str:
+        return "TrainSet" if self.is_train else self.test_set
+
+    @property
+    def file_date_format(self) -> str: return self.met_config.file_date_format
     
     @property
-    def root_path(self) -> str:
-        return self.met_config.root_path
+    def nwp_prefix(self) -> str: return self.met_config.nwp_prefix
     
     @property
-    def gis_data_path(self) -> str:
-        return self.met_config.gis_data_path
-    
-    @property
-    def file_date_format(self) -> str:
-        return self.met_config.file_date_format
-    
-    @property
-    def nwp_prefix(self) -> str:
-        return self.met_config.nwp_prefix
-    
-    @property
-    def user_id(self) -> str:
-        return self.met_config.user_id
-    
+    def gis_data_path(self) -> str: return self.met_config.gis_data_path
+
     @property
     def metadata(self) -> Dict:
         metadata_dict = vars(self).copy()
         metadata_dict.pop('_gis_cache', None)
+        metadata_dict.pop('_lmdb_env', None)
         return metadata_dict
 
     def str_to_datetime(self, time_str: str) -> datetime:
@@ -171,186 +125,341 @@ class MetSample:
     def datetime_to_str(self, datetime_obj: datetime) -> str:
         return datetime_obj.strftime(self.file_date_format)
 
-    def normalize(self, file_path: str, min_value: float = 0, max_value: float = 300) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        数据预处理：裁剪异常值并归一化。返回归一化后的数据和有效值 Mask。
-        
-        Returns:
-            tuple: (归一化后的数据, 有效值mask)
-                - 归一化后的数据: 范围在[0, 1]之间，float32类型
-                - 有效值mask: True表示有效值（非NaN且文件存在），bool类型
-        """
-        try:
-            data = np.load(file_path)
-            
-            # 提取有效值 mask：文件成功加载且数据是有限值
-            valid_mask = np.isfinite(data)
-            
-            # 归一化处理（缺测值会被处理）
-            data = np.nan_to_num(data, nan=min_value, neginf=min_value, posinf=max_value)
-            inv_denom = 1.0 / (max_value - min_value)
-            scale = (data - min_value) * inv_denom
-            np.clip(scale, 0.0, 1.0, out=scale)
-            
-            return scale.astype(np.float32, copy=False), valid_mask.astype(bool, copy=False)
-        except Exception:
-            return None, None
+    def _get_channel_limits(self, channel: Union[MetLabel, MetRadar, MetNwp, MetGis]) -> tuple[float, float]:
+        return (
+            float(getattr(channel, "min", 0.0)),
+            float(getattr(channel, "max", 1.0))
+        )
 
-    def normalize_with_mask(self, file_path: str, min_value: float = 0, max_value: float = 300, missing_value: float = -9) -> tuple[np.ndarray, np.ndarray]:
+    # ==============================================================================
+    # LMDB 读取核心 (解耦与重构)
+    # ==============================================================================
+
+    def _get_lmdb_env(self) -> lmdb.Environment:
+        if self._lmdb_env is None:
+            db_path = os.path.join(self.lmdb_root, f"{self.region_id}.lmdb")
+            # 增加 max_dbs=0 避免不必要的开销，设置合理的 map_size (如果只是读可以忽略)
+            self._lmdb_env = lmdb.open(
+                db_path, readonly=True, lock=False, readahead=False, meminit=False
+            )
+        return self._lmdb_env
+
+    def _generate_lmdb_key(self, channel: Union[MetLabel, MetRadar, MetNwp], timestamp: str) -> bytes:
         """
-        数据预处理：裁剪异常值并归一化，同时提取目标数据的严格有效值mask（用于目标数据）。
+        生成数据文件的 Key
+        """
+        var_name = channel.value
+        filename = ""
+        parent_dir = channel.parent
         
-        Returns:
-            tuple: (归一化后的数据, 有效值mask)
+        if isinstance(channel, MetRadar):
+            filename = f"{self.task_id}_RADA_{self.station_id}_{timestamp}_{self.radar_type}_{var_name}.npy"
+        elif isinstance(channel, MetLabel):
+            filename = f"{self.task_id}_Label_{var_name}_{self.station_id}_{timestamp}.npy"
+        elif isinstance(channel, MetNwp):
+            dt = self.str_to_datetime(timestamp)
+            if dt.minute >= 30:
+                dt += timedelta(hours=1)
+            nwp_ts = dt.replace(minute=0).strftime(self.file_date_format)
+            filename = f"{self.task_id}_{self.nwp_prefix}_{self.station_id}_{nwp_ts}_{var_name}.npy"
+
+        path_parts = [
+            self.task_id, self.dataset_folder_name, self.region_id, self.case_id,
+            parent_dir, var_name, filename
+        ]
+        return "/".join(path_parts).encode('ascii')
+
+    def _generate_lmdb_mask_key(self, timestamp: str) -> bytes:
+        """
+        [辅助] 生成 Mask Key (仅针对 RA)
+        """
+        var_name = "MASK"
+        parent_dir = "MASK"
+        filename = f"{self.task_id}_Label_{var_name}_{self.station_id}_{timestamp}.npy"
+        
+        path_parts = [
+            self.task_id, self.dataset_folder_name, self.region_id, self.case_id,
+            parent_dir, var_name, filename
+        ]
+        return "/".join(path_parts).encode('ascii')
+
+    def _read_mask_from_lmdb(self, timestamp: str) -> np.ndarray:
+        """
+        [独立] 读取物理 Mask 文件
+        返回: 
+            - 成功: 解压后的 Mask 数组
+            - 失败: 全 False (Zero) 数组，表示该时刻无效
         """
         try:
-            data = np.load(file_path)
-            # 提取有效值mask（在归一化之前）：排除 missing_value 和非有限值
-            valid_mask = (data != missing_value) & np.isfinite(data)
+            env = self._get_lmdb_env()
+            key = self._generate_lmdb_mask_key(timestamp)
             
-            # 归一化处理（缺测值会被处理）
-            data = np.nan_to_num(data, nan=min_value, neginf=min_value, posinf=max_value)
-            inv_denom = 1.0 / (max_value - min_value)
-            scale = (data - min_value) * inv_denom
-            np.clip(scale, 0.0, 1.0, out=scale)
-            
-            return scale.astype(np.float32, copy=False), valid_mask.astype(bool, copy=False)
+            with env.begin(write=False) as txn:
+                buf = txn.get(key)
+                if buf:
+                    return pickle.loads(zlib.decompress(buf))
         except Exception:
-            default_data = np.zeros(self.default_shape, dtype=np.float32)
-            default_mask = np.zeros(self.default_shape, dtype=bool)
-            return default_data, default_mask
-    
+            pass
+            
+        # 兜底：返回全 0 (False) 数组
+        return np.zeros(self.default_shape, dtype=bool)
+
+    def _read_from_lmdb(self, channel: Union[MetLabel, MetRadar, MetNwp], timestamp: str) -> Optional[np.ndarray]:
+        """
+        [独立] 读取数据文件
+        返回: 
+            - 成功: 解压后的 Data 数组
+            - 失败: None (由上层处理兜底)
+        """
+        try:
+            env = self._get_lmdb_env()
+            key = self._generate_lmdb_key(channel, timestamp)
+            
+            with env.begin(write=False) as txn:
+                buf = txn.get(key)
+                if buf is None:
+                    return None
+                return pickle.loads(zlib.decompress(buf))
+        except Exception:
+            return None
+
+    # ==============================================================================
+    # 加载与归一化
+    # ==============================================================================
+
+    def _normalize_data(self, data: np.ndarray, channel: Union[MetLabel, MetRadar, MetNwp]) -> np.ndarray:
+        min_val, max_val = self._get_channel_limits(channel)
+        data = data.astype(np.float32)
+        denom = max_val - min_val
+        if abs(denom) > 1e-6:
+            inv_denom = 1.0 / denom
+            data = (data - min_val) * inv_denom
+        else:
+            data[:] = 0.0
+        np.clip(data, 0.0, 1.0, out=data)
+        return data
+
+    def _load_mask_frame(self, timestamp: str) -> np.ndarray:
+        """
+        [核心] 获取当前时间戳的全局 Mask
+        """
+        return self._read_mask_from_lmdb(timestamp)
+
+    def _load_label_frame(self, var: MetLabel, timestamp: str) -> np.ndarray:
+        """
+        加载 Label 数据 (不返回 Mask)
+        """
+        data = self._read_from_lmdb(var, timestamp)
+        if data is None: 
+            return np.zeros(self.default_shape, dtype=np.float32)
+        return self._normalize_data(data, var)
+
+    def _load_radar_frame(self, var: MetRadar, timestamp: str) -> np.ndarray:
+        """
+        加载 Radar 数据 (不返回 Mask)
+        """
+        data = self._read_from_lmdb(var, timestamp)
+        if data is None: 
+            return np.zeros(self.default_shape, dtype=np.float32)
+        return self._normalize_data(data, var)
+
+    def _load_nwp_frame(self, var: MetNwp, timestamp: str) -> np.ndarray: 
+        """
+        加载 NWP 数据 (不返回 Mask)
+        """
+        data = self._read_from_lmdb(var, timestamp)
+        if data is None: 
+            return np.zeros(self.default_shape, dtype=np.float32)
+        return self._normalize_data(data, var)
+
+    def _load_gis_frame(self, var: MetGis, timestamp: str) -> np.ndarray:
+        """
+        加载 GIS 数据 (不返回 Mask)
+        """
+        # 1. 动态计算 Time Embeddings
+        if var in [MetGis.MONTH_SIN, MetGis.MONTH_COS, MetGis.HOUR_SIN, MetGis.HOUR_COS]:
+            try:
+                obs_time = self.str_to_datetime(timestamp)
+                raw_val = 0.0
+                if var in [MetGis.MONTH_SIN, MetGis.MONTH_COS]:
+                    angle = 2 * math.pi * float(obs_time.month) / 12.0
+                    raw_val = math.sin(angle) if var == MetGis.MONTH_SIN else math.cos(angle)
+                elif var in [MetGis.HOUR_SIN, MetGis.HOUR_COS]:
+                    angle = 2 * math.pi * float(obs_time.hour) / 24.0
+                    raw_val = math.sin(angle) if var == MetGis.HOUR_SIN else math.cos(angle)
+                
+                min_val, max_val = self._get_channel_limits(var)
+                norm_val = (raw_val - min_val) / (max_val - min_val) if (max_val - min_val) > 0 else 0.5
+                norm_val = max(0.0, min(1.0, norm_val))
+                return np.full(self.default_shape, norm_val, dtype=np.float32)
+            except:
+                pass
+        
+        # 2. 静态 GIS 文件读取
+        try:
+            file_name = f"{var.value}.npy"
+            file_path = os.path.join(self.gis_data_path, self.station_id, file_name)
+            if os.path.exists(file_path):
+                raw_data = np.load(file_path)
+                if raw_data.shape != self.default_shape:
+                    raw_data = cv2.resize(raw_data, (self.default_shape[1], self.default_shape[0]), interpolation=cv2.INTER_LINEAR)
+                min_val, max_val = self._get_channel_limits(var)
+                data = np.nan_to_num(raw_data, nan=min_val)
+                denom = max_val - min_val
+                if abs(denom) > 1e-6:
+                    scale = (data - min_val) / denom
+                else:
+                    scale = np.zeros_like(data)
+                np.clip(scale, 0.0, 1.0, out=scale)
+                return scale.astype(np.float32)
+        except Exception:
+            pass
+        return np.zeros(self.default_shape, dtype=np.float32)
+
+    def _preload_gis_data(self):
+        self._gis_cache.clear()
+        default_data = np.zeros(self.default_shape, dtype=np.float32)
+        first_ts = self.timestamps[0]
+        
+        for channel in self.channels:
+            if isinstance(channel, MetGis):
+                cache_key = f"gis_{channel.value}"
+                data = self._load_gis_frame(channel, first_ts)
+                self._gis_cache[cache_key] = data if data is not None else default_data
+
+    def _load_channel_frame_with_fallback(self, channel, timestamp: str, timestep_idx: int, all_timestamps: List[str]) -> np.ndarray:
+        """
+        [修改] 只返回数据 array
+        """
+        if isinstance(channel, MetGis):
+            cache_key = f"gis_{channel.value}"
+            if cache_key in self._gis_cache:
+                return self._gis_cache[cache_key]
+            return self._load_gis_frame(channel, timestamp)
+
+        # 尝试直接读取
+        if isinstance(channel, MetLabel):
+            d = self._load_label_frame(channel, timestamp)
+        elif isinstance(channel, MetRadar):
+            d = self._load_radar_frame(channel, timestamp)
+        elif isinstance(channel, MetNwp):
+            d = self._load_nwp_frame(channel, timestamp)
+        else:
+            d = np.zeros(self.default_shape, dtype=np.float32)
+
+        # 这里实际上 _load_..._frame 已经做了 zeros 兜底，但如果是逻辑上的 None 检查可以保留
+        # 简单起见，假设返回的 d 总是有效的 ndarray (即便全0)
+        
+        # 简单的时序填补 (Time Interpolation/Padding) - 只有当数据真的完全缺失时才需要
+        # 但鉴于现在 _load_X_frame 返回全0，很难区分是"读到了0"还是"文件不存在"
+        # 如果需要严格的时序填补，_load_X_frame 应该返回 None，然后在这里处理
+        # 既然采用了 "Zero Padding for Missing"，直接返回 d 即可
+        return d
+
+    # ==============================================================================
+    # 核心加载接口 (obs_seq_len / pred_seq_len)
+    # ==============================================================================
+
     def load_input_data(self) -> Tuple[np.ndarray, np.ndarray]:
         """
-        [SOTA 改进] 加载输入数据，采用 Early Fusion 策略融合未来 NWP。
-        结构: 
-        1. 基础输入 (10帧): [Radar, Past_NWP, GIS]
-        2. 未来引导 (20帧折叠为10帧): [Future_NWP]
-        
-        Returns:
-            input_data: (T=10, C_total, H, W)
-            input_mask: (T=10, C_total, H, W)
+        加载输入数据 (观测阶段 + 未来引导)
         """
-        # 1. 定义时间范围
-        # 输入时间: T=0 ~ T=9 (过去1小时)
-        past_timesteps = self.timestamps[:self.max_timesteps] 
-        # 未来引导时间: T=10 ~ T=29 (未来2小时) -> 对应输出的时刻
-        future_start = self.max_timesteps
-        future_end = future_start + self.out_timesteps
+        past_timesteps = self.timestamps[:self.obs_seq_len]
+        
+        future_start = self.obs_seq_len
+        future_end = future_start + self.pred_seq_len
         future_timesteps = self.timestamps[future_start:future_end]
         
-        # 预加载 GIS
         self._preload_gis_data()
 
-        # --- A. 加载基础输入 (Past 10 Frames) ---
-        past_series = []
-        past_masks = []
+        # A. 基础观测 (Observation)
+        past_series, past_masks = [], []
         
-        for i, timestamp in enumerate(past_timesteps):
-            frames = []
-            masks = []
-            for channel in self.channels:
-                data, mask = self._load_channel_frame_with_fallback(channel, timestamp, i, self.timestamps)
-                frames.append(data)
-                masks.append(mask)
-            past_series.append(np.stack(frames, axis=0))
-            past_masks.append(np.stack(masks, axis=0))
+        for i, ts in enumerate(past_timesteps):
+            # 1. 获取该时刻的全局 Mask
+            ts_mask = self._load_mask_frame(ts)
             
-        # Shape: (10, C_base, H, W)
-        input_base = np.stack(past_series, axis=0)
+            # 2. 获取所有通道数据
+            frames = []
+            for channel in self.channels:
+                d = self._load_channel_frame_with_fallback(channel, ts, i, self.timestamps)
+                frames.append(d)
+            
+            # 3. 堆叠
+            past_series.append(np.stack(frames, axis=0)) # (C, H, W)
+            
+            # 4. Mask 扩展: (C, H, W) - 所有通道共享同一个 Mask
+            # 广播 ts_mask 到所有通道
+            mask_expanded = np.repeat(ts_mask[np.newaxis, :, :], len(self.channels), axis=0)
+            past_masks.append(mask_expanded)
+            
+        input_base = np.stack(past_series, axis=0) # (obs_seq_len, C, H, W)
         mask_base = np.stack(past_masks, axis=0)
 
-        # --- B. 加载未来 NWP 引导 (Future 20 Frames) ---
-        # 筛选出 NWP 通道
+        # B. 未来NWP引导 (Future Guidance)
         nwp_channels = [c for c in self.channels if isinstance(c, MetNwp)]
         
-        if len(nwp_channels) > 0 and len(future_timesteps) == self.out_timesteps:
-            future_nwp_series = []
-            future_nwp_masks = []
-            
-            # 加载 20 帧未来 NWP
-            for i, timestamp in enumerate(future_timesteps):
-                frames = []
-                masks = []
-                for channel in nwp_channels:
-                    # 注意：这里我们只加载 NWP
-                    # 对于未来数据，如果缺测，也尝试 fallback，或者补0
-                    # 由于 _load_channel_frame_with_fallback 需要全局索引，这里简单处理直接调 _load_nwp_frame
-                    # 或者复用 fallback 逻辑，注意 index 偏移
-                    global_idx = future_start + i
-                    data, mask = self._load_channel_frame_with_fallback(channel, timestamp, global_idx, self.timestamps)
-                    frames.append(data)
-                    masks.append(mask)
-                future_nwp_series.append(np.stack(frames, axis=0))
-                future_nwp_masks.append(np.stack(masks, axis=0))
-            
-            # Shape: (20, C_nwp, H, W)
-            input_future_nwp = np.stack(future_nwp_series, axis=0)
-            mask_future_nwp = np.stack(future_nwp_masks, axis=0)
-            
-            # --- C. 时间折叠 (Temporal Folding) ---
-            # 将 20 帧折叠为 10 帧: (20, C, H, W) -> (10, 2, C, H, W) -> (10, 2*C, H, W)
-            # 这样第 i 帧输入就包含了第 2i 和 2i+1 帧的未来指引
-            B_t, C_n, H_t, W_t = input_future_nwp.shape
-            fold_factor = self.out_timesteps // self.max_timesteps # 20 // 10 = 2
-            
-            if self.out_timesteps % self.max_timesteps == 0:
-                input_folded = input_future_nwp.reshape(self.max_timesteps, fold_factor * C_n, H_t, W_t)
-                mask_folded = mask_future_nwp.reshape(self.max_timesteps, fold_factor * C_n, H_t, W_t)
+        if nwp_channels and len(future_timesteps) == self.pred_seq_len:
+            future_series, future_masks = [], []
+            for i, ts in enumerate(future_timesteps):
+                # 获取未来时刻 Mask
+                ts_mask = self._load_mask_frame(ts)
                 
-                # --- D. 拼接 ---
-                # Final: (10, C_base + 2*C_nwp, H, W)
+                frames = []
+                for channel in nwp_channels:
+                    # 注意：复用 fallback 逻辑，或者直接调用 load_nwp
+                    d = self._load_channel_frame_with_fallback(channel, ts, future_start + i, self.timestamps)
+                    frames.append(d)
+                
+                future_series.append(np.stack(frames, axis=0))
+                
+                # Mask 扩展
+                mask_expanded = np.repeat(ts_mask[np.newaxis, :, :], len(nwp_channels), axis=0)
+                future_masks.append(mask_expanded)
+            
+            input_future = np.stack(future_series, axis=0)
+            mask_future = np.stack(future_masks, axis=0)
+            
+            # Temporal Folding
+            B, C, H, W = input_future.shape
+            fold_factor = self.pred_seq_len // self.obs_seq_len
+            
+            if self.pred_seq_len % self.obs_seq_len == 0:
+                input_folded = input_future.reshape(self.obs_seq_len, fold_factor * C, H, W)
+                mask_folded = mask_future.reshape(self.obs_seq_len, fold_factor * C, H, W)
+                
                 input_data = np.concatenate([input_base, input_folded], axis=1)
                 input_mask = np.concatenate([mask_base, mask_folded], axis=1)
             else:
-                # 如果不能整除 (极少见)，直接放弃拼接未来 NWP，避免报错
-                input_data = input_base
-                input_mask = mask_base
+                input_data, input_mask = input_base, mask_base
         else:
-            # 如果没有 NWP 通道或未来时间步不足
-            input_data = input_base
-            input_mask = mask_base
+            input_data, input_mask = input_base, mask_base
 
         return input_data, input_mask
 
-    def load_target_data(self) -> tuple[np.ndarray, np.ndarray]:
-        target_data = []
-        valid_mask = []
+    def load_target_data(self) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        加载目标数据 (预测阶段)
+        """
+        target_data, valid_mask = [], []
+        target_timestamps = self.timestamps[self.obs_seq_len : self.obs_seq_len + self.pred_seq_len]
 
-        start_idx = self.max_timesteps
-        end_idx = start_idx + self.out_timesteps
-        target_timestamps = self.timestamps[start_idx : end_idx]
+        for ts in target_timestamps:
+            # 1. 获取全局 Mask
+            ts_mask = self._load_mask_frame(ts)
+            
+            # 2. 获取 Label 数据
+            d = self._load_label_frame(MetLabel.RA, ts)
+            
+            target_data.append(d)
+            valid_mask.append(ts_mask)
 
-        for timestamp in target_timestamps:
-            file_path = os.path.join(
-                self.base_path,
-                MetVar.LABEL.name,
-                MetLabel.RA.name,
-                f"CP_Label_{MetLabel.RA.name}_{self.station_id}_{timestamp}.npy"
-            )
-
-            min_val, max_val = self._get_channel_limits(MetLabel.RA)
-            missing_val = getattr(MetLabel.RA, 'missing_value', -9.0)
-            data, mask = self.normalize_with_mask(file_path, min_val, max_val, missing_value=missing_val)
-            target_data.append(data)
-            valid_mask.append(mask)
-
-        target_data = np.expand_dims(np.stack(target_data, axis=0), axis=1)  # (T, C, H, W)
-        valid_mask = np.expand_dims(np.stack(valid_mask, axis=0), axis=1)  # (T, C, H, W)
-        return target_data, valid_mask
+        return (
+            np.expand_dims(np.stack(target_data, axis=0), axis=1),
+            np.expand_dims(np.stack(valid_mask, axis=0), axis=1)
+        )
 
     def to_numpy(self, is_train: bool=False) -> Tuple[Dict, np.ndarray, Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        将数据转换为numpy数组
-        
-        Returns:
-            Tuple: (metadata, input_data, target_data, target_mask, input_mask)
-                - metadata: 样本元数据字典
-                - input_data: 输入数据，形状为 (T, C, H, W)
-                - target_data: 目标数据，形状为 (T_out, C, H, W)，测试时为 None
-                - target_mask: 目标有效值mask，形状为 (T_out, C, H, W)，测试时为 None
-                - input_mask: 输入有效值mask，形状为 (T_in, C, H, W)
-        """
         input_data, input_mask = self.load_input_data()
         
         if is_train:
@@ -358,228 +467,3 @@ class MetSample:
             return self.metadata, input_data, target_data, target_mask, input_mask
         else:
             return self.metadata, input_data, None, None, input_mask
-    
-    def _get_channel_limits(self, channel: Union[MetLabel, MetRadar, MetNwp, MetGis]) -> tuple[float, float]:
-        return (
-            float(getattr(channel, "min", 0.0)),
-            float(getattr(channel, "max", 1.0))
-        )
-
-    def _load_label_frame(self, var: MetLabel, timestamp: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        file_path = os.path.join(
-            self.base_path, var.parent, var.value, 
-            f"{self.task_id}_Label_{var.value}_{self.station_id}_{timestamp}.npy"
-        )
-        min_val, max_val = self._get_channel_limits(var)
-        return self.normalize(file_path, min_val, max_val)
-
-    def _load_radar_frame(self, var: MetRadar, timestamp: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        file_path = os.path.join(
-            self.base_path, var.parent, var.value, 
-            f"{self.task_id}_RADA_{self.station_id}_{timestamp}_{self.radar_type}_{var.value}.npy"
-        )
-        min_val, max_val = self._get_channel_limits(var)
-        return self.normalize(file_path, min_val, max_val)
-
-    def _load_nwp_frame(self, var: MetNwp, timestamp: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]: # type: ignore
-        obs_time = self.str_to_datetime(timestamp)
-
-        if obs_time.minute < 30:
-            obs_time = obs_time.replace(minute=0)
-        else:
-            obs_time = obs_time.replace(minute=0) + timedelta(hours=1)
-
-        file_path = os.path.join(
-            self.base_path, var.parent, var.name, 
-            f"{self.task_id}_{self.nwp_prefix}_{self.station_id}_{self.datetime_to_str(obs_time)}_{var.value}.npy"
-        )
-        min_val, max_val = self._get_channel_limits(var)
-        data, mask = self.normalize(file_path, min_val, max_val)
-        
-        if data is None or mask is None:
-            return None, None
-            
-        # NWP 数据需要进行插值
-        dsize = (self.default_shape[1], self.default_shape[0])
-        resized_data = cv2.resize(data, dsize, interpolation=cv2.INTER_LINEAR)
-        resized_mask = cv2.resize(mask.astype(np.uint8), dsize, interpolation=cv2.INTER_NEAREST).astype(bool)
-        
-        return resized_data.astype(np.float32, copy=False), resized_mask
-
-    def _load_gis_frame(self, var: MetGis, timestamp: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        加载GIS数据帧。
-        对于静态数据(DEM/LAT/LON)，从文件加载；
-        对于时间数据(MONTH/HOUR)，采用周期性编码 (Sin/Cos) 动态生成。
-        """
-        # GIS数据通常被认为是全局有效的，初始 Mask 全为 True
-        full_mask = np.full(self.default_shape, True, dtype=bool)
-        
-        # --- 处理周期性时间变量 ---
-        if var in [MetGis.MONTH_SIN, MetGis.MONTH_COS, MetGis.HOUR_SIN, MetGis.HOUR_COS]:
-            try:
-                obs_time = self.str_to_datetime(timestamp)
-                raw_val = 0.0
-                
-                # 计算周期性数值
-                if var in [MetGis.MONTH_SIN, MetGis.MONTH_COS]:
-                    # 月份周期为 12
-                    # 将 1-12 映射到角度。 (month / 12) * 2pi
-                    angle = 2 * math.pi * float(obs_time.month) / 12.0
-                    raw_val = math.sin(angle) if var == MetGis.MONTH_SIN else math.cos(angle)
-                    
-                elif var in [MetGis.HOUR_SIN, MetGis.HOUR_COS]:
-                    # 小时周期为 24
-                    # 将 0-23 映射到角度。 (hour / 24) * 2pi
-                    angle = 2 * math.pi * float(obs_time.hour) / 24.0
-                    raw_val = math.sin(angle) if var == MetGis.HOUR_SIN else math.cos(angle)
-                
-                # 归一化处理
-                # MetGis 定义中 min=-1, max=1
-                # 归一化公式: (x - min) / (max - min) => (x - (-1)) / 2 => (x + 1) / 2
-                # 结果将映射到 [0, 1] 区间，符合网络输入规范
-                min_val, max_val = self._get_channel_limits(var)
-                if max_val - min_val > 0:
-                    normalized_value = (raw_val - min_val) / (max_val - min_val)
-                else:
-                    normalized_value = 0.5 # 默认中间值
-                
-                # 裁剪保险
-                normalized_value = max(0.0, min(1.0, normalized_value))
-                
-                # 填充整个空间网格
-                data = np.full(self.default_shape, normalized_value, dtype=np.float32)
-                return data, full_mask
-                
-            except (ValueError, AttributeError, Exception) as e:
-                # 异常兜底
-                return np.zeros(self.default_shape, dtype=np.float32), np.zeros(self.default_shape, dtype=bool)
-
-        # --- 处理静态 GIS 文件数据 (LAT, LON, DEM) ---
-        try:
-            # 文件名映射：MetGis.LAT.value -> "lat.npy"
-            file_name = f"{var.value}.npy"
-            file_path = os.path.join(self.gis_data_path, self.station_id, file_name)
-            
-            min_val, max_val = self._get_channel_limits(var)
-            
-            # 使用通用的 normalize 方法加载并归一化
-            data, mask = self.normalize(file_path, min_val, max_val)
-            
-            if data is None:
-                return np.zeros(self.default_shape, dtype=np.float32), np.zeros(self.default_shape, dtype=bool)
-                
-            return data, mask
-
-        except Exception:
-            return np.zeros(self.default_shape, dtype=np.float32), np.zeros(self.default_shape, dtype=bool)
-
-    def _preload_gis_data(self):
-        """预加载所有GIS数据到缓存"""
-        self._gis_cache.clear()
-        # 创建默认零填充和全 False mask
-        default_data = np.zeros(self.default_shape, dtype=np.float32)
-        default_mask = np.zeros(self.default_shape, dtype=bool)
-        
-        for channel in self.channels:
-            if isinstance(channel, MetGis):
-                cache_key = f"gis_{channel.value}"
-                if cache_key not in self._gis_cache:
-                    data, mask = self._load_gis_frame(channel, self.timestamps[0])
-                    self._gis_cache[cache_key] = (data if data is not None else default_data, 
-                                                 mask if mask is not None else default_mask)
-
-    def _load_channel_frame(self, channel: Union[MetLabel, MetRadar, MetNwp, MetGis], timestamp: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        加载单个通道在指定时刻的数据和 Mask。
-        返回 (None, None) 表示数据缺失，便于后续缺测补值处理。
-        """
-        loader_map = {
-            MetLabel: self._load_label_frame,
-            MetRadar: self._load_radar_frame,
-            MetGis: self._load_gis_frame,
-            MetNwp: self._load_nwp_frame,
-        }
-
-        loader = None
-        for enum_cls, handler in loader_map.items():
-            if isinstance(channel, enum_cls):
-                loader = handler
-                break
-
-        if loader is None:
-            return None, None
-
-        data, mask = loader(channel, timestamp)
-
-        if data is None:
-            return None, None
-
-        # 确保数据类型正确
-        if not isinstance(data, np.ndarray):
-            data = np.array(data, dtype=np.float32)
-        if not isinstance(mask, np.ndarray):
-            mask = np.array(mask, dtype=bool)
-
-        return data.astype(np.float32, copy=False), mask.astype(bool, copy=False)
-
-    def _load_temporal_data_with_fallback(self, channel: Union[MetLabel, MetRadar, MetNwp, MetGis], timestamp: str, 
-                                         timestep_idx: int, all_timestamps: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        加载时序数据，支持缺测补值策略：当前时次缺测时，按前一时次 → 后一时次 → 补0。
-        返回数据和 Mask。如果发生补值，Mask 对应的位置为 False。
-        """
-        # 创建默认零填充和全 False mask
-        default_data = np.zeros(self.default_shape, dtype=np.float32)
-        default_mask = np.zeros(self.default_shape, dtype=bool)
-
-        # 1. 尝试加载当前时次数据
-        data, mask = self._load_channel_frame(channel, timestamp)
-        if data is not None and mask is not None:
-            return data, mask
-        
-        # 2. 当前时次缺测，使用前一时次补值
-        if timestep_idx > 0:
-            prev_timestamp = all_timestamps[timestep_idx - 1]
-            data, mask = self._load_channel_frame(channel, prev_timestamp)
-            if data is not None:
-                return data, default_mask
-        
-        # 3. 前一时次也缺测，使用后一时次补值
-        if timestep_idx < len(all_timestamps) - 1:
-            next_timestamp = all_timestamps[timestep_idx + 1]
-            data, mask = self._load_channel_frame(channel, next_timestamp)
-            if data is not None:
-                return data, default_mask
-        
-        return default_data, default_mask
-
-    def _load_channel_frame_with_fallback(self, channel: Union[MetLabel, MetRadar, MetNwp, MetGis], timestamp: str, 
-                                         timestep_idx: int, all_timestamps: List[str]) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        加载单个通道数据，支持缺测补值策略。
-        """
-        # 创建默认零填充和全 False mask
-        default_data = np.zeros(self.default_shape, dtype=np.float32)
-        default_mask = np.zeros(self.default_shape, dtype=bool)
-
-        # 1. GIS数据直接从缓存读取
-        if isinstance(channel, MetGis):
-            cache_key = f"gis_{channel.value}"
-            if cache_key in self._gis_cache:
-                return self._gis_cache[cache_key]
-            # 理论上应该已经被预加载，如果缓存中没有，尝试加载并返回默认零填充/全 False mask
-            data, mask = self._load_gis_frame(channel, timestamp)
-            if data is not None and mask is not None:
-                self._gis_cache[cache_key] = (data, mask)
-                return data, mask
-            return default_data, default_mask
-        
-        if isinstance(channel, (MetRadar, MetNwp)):
-            return self._load_temporal_data_with_fallback(channel, timestamp, timestep_idx, all_timestamps)
-        
-        data, mask = self._load_channel_frame(channel, timestamp)
-        if data is not None and mask is not None:
-            return data, mask
-        
-        return default_data, default_mask

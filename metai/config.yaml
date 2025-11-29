@@ -14,3 +14,6 @@ nwp_prefix: "ERA5"
 
 # 用户ID配置
 user_id: 'CP2025000081'
+
+# LMDB根路径配置
+lmdb_root_path: "/data/zjobs/LMDB/"
