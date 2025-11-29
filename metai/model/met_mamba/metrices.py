@@ -1,81 +1,89 @@
 import torch
 import torch.nn as nn
+import math
 from typing import Dict, Optional
 
 class MetScore(nn.Module):
     """
-    竞赛评分标准计算器模块
+    竞赛评分标准计算器模块。
     
-    功能描述:
-    1. Score_total: 计算时间维度的加权平均总分，支持根据输入时效长度自动归一化权重。
-    2. R_k (相关系数): 计算 Pearson 相关系数，自动剔除预测值与实况值均为背景( < 0.1)的格点。
-    3. TS_ik (区间命中率): 采用【区间命中】(Interval TS) 逻辑，即预测值与实况值需落在同一等级区间才算命中。
-    4. MAE_ik (区间绝对误差): 采用【分段区间】逻辑，仅统计实况落在该等级区间内的绝对误差。
-    5. 维度支持: 自动适配序列输入 [B, T, H, W] 与单帧输入 [B, H, W]。
-    6. 数据范围: 数据范围为 0-30mm。
+    支持 Log Space 反归一化，确保在物理空间 (mm) 计算指标。
+    
+    Args:
+        use_log_norm (bool): 输入是否为 Log 归一化数据。如果为 True，
+            会在计算前将其还原为物理值。默认为 True。
+        data_max (float): 线性归一化时的最大物理值。仅在 use_log_norm=False 时使用。
     """
     
-    def __init__(self, data_max: float = 30.0):
-        """
-        Args:
-            data_max (float): 数据集归一化时使用的最大物理值 (mm)。默认值: 30.0。
-        """
+    def __init__(self, use_log_norm: bool = True, data_max: float = 30.0):
         super().__init__()
+        self.use_log_norm = use_log_norm
         self.data_max = data_max
+        
+        # Log 反变换参数: log(30.0 + 1)
+        self.log_factor = math.log(30.0 + 1)
         
         # --- 注册常量参数 (Buffer) ---
         
-        # 1. 时效权重 (表1)
-        # 对应: 6min, 12min, ..., 120min
+        # 1. 时效权重 (对应 6min - 120min)
         time_weights = torch.tensor([
             0.0075, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1,
             0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.0075, 0.005
         ])
         self.register_buffer('time_weights_default', time_weights)
 
-        # 2. 分级阈值 (表2) - 区间下界
-        # [0.1, 1.0, 2.0, 5.0, 8.0]
+        # 2. 分级阈值 (mm)
         thresholds = torch.tensor([0.1, 1.0, 2.0, 5.0, 8.0])
         self.register_buffer('thresholds', thresholds)
 
-        # 3. 分级阈值 - 区间上界
-        # [1.0, 2.0, 5.0, 8.0, inf]
+        # 3. 分级区间上界 (用于 Interval TS 计算)
         inf_tensor = torch.tensor([float('inf')])
         highs = torch.cat([thresholds[1:], inf_tensor])
         self.register_buffer('highs', highs)
 
-        # 4. 分级权重 (表2)
+        # 4. 分级权重
         level_weights = torch.tensor([0.1, 0.1, 0.2, 0.25, 0.35])
         self.register_buffer('level_weights', level_weights)
 
     def forward(self, 
                 pred_norm: torch.Tensor, 
                 target_norm: torch.Tensor, 
-                mask: Optional[torch.Tensor] = None,
-                override_data_max: Optional[float] = None) -> Dict[str, torch.Tensor]:
+                mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """
+        计算各项评分指标。
+        
         Args:
-            pred_norm: 归一化预测值，形状 [B, T, H, W] 或 [B, H, W]。
-            target_norm: 归一化真值，形状 [B, T, H, W] 或 [B, H, W]。
-            mask: 有效区域掩码 (1为有效)，形状同上或 [B, 1, H, W]。
-            override_data_max: (可选) 临时覆盖初始化时的 data_max。
+            pred_norm: 归一化预测值。
+            target_norm: 归一化真值。
+            mask: 有效区域掩码。
         """
         with torch.no_grad():
-            return self._compute(pred_norm, target_norm, mask, override_data_max)
+            return self._compute(pred_norm, target_norm, mask)
 
-    def _compute(self, pred_norm, target_norm, mask, override_data_max):
-        # 1. 维度适配处理
-        if pred_norm.dim() == 3:
-            pred_norm = pred_norm.unsqueeze(1)
-            target_norm = target_norm.unsqueeze(1)
+    def _compute(self, pred_norm, target_norm, mask):
+        # 1. 反归一化：还原为物理量 (mm)
+        if self.use_log_norm:
+            # Log Space -> Physical Space (0-30mm)
+            # norm = log(mm + 1) / factor
+            # mm = exp(norm * factor) - 1
+            pred = torch.expm1(pred_norm * self.log_factor)
+            target = torch.expm1(target_norm * self.log_factor)
+            
+            # 安全截断，防止数值误差产生负数
+            pred = torch.clamp(pred, 0.0, None)
+            target = torch.clamp(target, 0.0, None)
+        else:
+            # Linear Space
+            pred = pred_norm * self.data_max
+            target = target_norm * self.data_max
+        
+        # 2. 维度适配处理
+        if pred.dim() == 3:
+            pred = pred.unsqueeze(1)
+            target = target.unsqueeze(1)
             if mask is not None and mask.dim() == 3:
                 mask = mask.unsqueeze(1)
 
-        # 2. 还原物理量
-        scale = override_data_max if override_data_max is not None else self.data_max
-        pred = pred_norm * scale
-        target = target_norm * scale
-        
         B, T, H, W = pred.shape
         device = pred.device
         
@@ -205,9 +213,10 @@ class MetScore(nn.Module):
             'mae_levels': mae_levels
         }
 
+
 class MetricTracker:
     """
-    指标累加器模块
+    指标累加器模块。
 
     用于在验证或测试循环中累积 Batch 结果并计算平均值。
     """
