@@ -46,7 +46,7 @@ class MetConfig:
         config_path = Path(config_path)
         
         if not config_path.exists():
-            MLOGE(f"配置文件不存在: {config_path}")
+            MLOGE(f"Configuration file does not exist: {config_path}")
             return cls()
         
         try:
@@ -59,12 +59,12 @@ class MetConfig:
                 if hasattr(config, key):
                     setattr(config, key, value)
                 else:
-                    MLOGE(f"未知配置项: {key}")
+                    MLOGE(f"Unknown configuration item: {key}")
             
             return config
             
         except Exception as e:
-            MLOGE(f"读取配置文件失败: {e}")
+            MLOGE(f"Failed to read configuration file: {e}")
             return cls()
     
     @classmethod
@@ -82,7 +82,7 @@ class MetConfig:
         if config_path is None:
             config_file = "config.yaml"
             
-            # 查找配置文件
+            # 查找配置文件路径列表
             default_paths = [
                 Path.cwd() / config_file,
                 Path.cwd() / "metai" / config_file,
@@ -96,10 +96,10 @@ class MetConfig:
         
         if config_path:
             config = cls.from_file(config_path)
-            MLOGI(f"从配置文件加载配置: {config_path}")
+            MLOGI(f"Loading configuration from file: {config_path}")
         else:
             config = cls()
-            MLOGI(f"使用默认配置")
+            MLOGI(f"Using default configuration")
         
         return config
     
@@ -120,11 +120,11 @@ class MetConfig:
             with open(config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(config_data, f, default_flow_style=False, allow_unicode=True)
             
-            MLOGI(f"配置已保存到: {config_path}")
+            MLOGI(f"Configuration saved to: {config_path}")
             return True
             
         except Exception as e:
-            MLOGE(f"保存配置文件失败: {e}")
+            MLOGE(f"Failed to save configuration file: {e}")
             return False
     
     def get_root_path(self) -> str:
@@ -149,7 +149,7 @@ class MetConfig:
         
         # 验证路径
         if not self.root_path:
-            errors.append("root_path 不能为空")
+            errors.append("root_path cannot be empty")
         
         # 验证日期格式
         try:
@@ -157,19 +157,17 @@ class MetConfig:
             test_date = datetime(2024, 1, 1, 12, 0)
             test_date.strftime(self.file_date_format)
         except ValueError as e:
-            errors.append(f"日期格式无效: {e}")
+            errors.append(f"Invalid date format: {e}")
         
         if errors:
             for error in errors:
-                MLOGE(f"配置验证错误: {error}")
+                MLOGE(f"Configuration validation error: {error}")
             return False
         
         return True
 
-
 # 全局配置实例
 _config: Optional[MetConfig] = None
-
 
 def get_config(config_path: Optional[Union[str, Path]] = None) -> MetConfig:
     """
@@ -186,11 +184,10 @@ def get_config(config_path: Optional[Union[str, Path]] = None) -> MetConfig:
     if config_path is not None or _config is None:
         _config = MetConfig.load(config_path)
         if not _config.validate():
-            MLOGE("配置验证失败，使用默认配置")
+            MLOGE("Configuration validation failed, using default configuration")
             _config = MetConfig()
     
     return _config
-
 
 def reload_config(config_path: Optional[Union[str, Path]] = None) -> MetConfig:
     """
@@ -205,7 +202,6 @@ def reload_config(config_path: Optional[Union[str, Path]] = None) -> MetConfig:
     global _config
     _config = MetConfig.load(config_path)
     return _config
-
 
 def create_default_config(config_path: Union[str, Path]) -> bool:
     """
