@@ -281,13 +281,28 @@ class MetSample:
             return None
 
     def _normalize(self, data: np.ndarray, channel: ChannelType) -> np.ndarray:
-        """执行 Min-Max 归一化，并转为 float32。"""
+        """执行归一化。针对降水数据应用 Log-Transform + MinMax 策略。"""
         min_v = getattr(channel, 'min', 0.0)
         max_v = getattr(channel, 'max', 1.0)
         
         data = data.astype(np.float32)
-        denom = max_v - min_v
         
+        # 针对降水 (RA) 应用 Log-Transform
+        if channel == MetLabel.RA:
+            # 1. 还原物理值: Storage Value (0-300) -> Physical Value (0-30.0 mm)
+            # 原始数据存储时为了精度放大了10倍，这里先还原
+            data = data / 10.0
+            
+            # 2. Log-transform: x -> log(x + 1)
+            # Min-Max on Log space: x_norm = log1p(x) / log1p(max)
+            # 假设 min_v 为 0, physical_max 为 30.0
+            physical_max = 30.0
+            data = np.log1p(data) / np.log1p(physical_max)
+            
+            return np.clip(data, 0.0, 1.0)
+        
+        # 其他通道保持线性归一化
+        denom = max_v - min_v
         if abs(denom) > 1e-9:
             data = (data - min_v) / denom
         else:

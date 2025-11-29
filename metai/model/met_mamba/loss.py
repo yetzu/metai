@@ -1,254 +1,248 @@
 import torch
 import torch.nn as nn
+import math
+from typing import Dict, Optional
 
-# 全局物理常量: 30.0mm 对应模型输出 1.0
-MM_MAX = 30.0
-
-
-class MAELoss(nn.Module):
+class MetScore(nn.Module):
     """
-    加权平均绝对误差损失 (Weighted MAE Loss)。
-
-    该损失函数基于降水强度分级进行加权，策略上与竞赛评分标准严格对齐，
-    旨在最大化 MAE 指标得分，并包含针对虚警（False Alarm）的抑制机制。
-
-    Args:
-        zero_rain_weight (float): 背景（无雨）区域的权重。默认为 0.05。
-        false_alarm_penalty (float): 虚警惩罚系数。当实况无雨但预测有雨时，
-            Loss 权重将乘以该系数。默认为 2.0。
-        loss_scale (float): 整体 Loss 缩放因子，防止梯度数值过小。默认为 10.0。
-    """
-    def __init__(self, 
-                 zero_rain_weight: float = 0.05,
-                 false_alarm_penalty: float = 2.0,
-                 loss_scale: float = 10.0):
-        super().__init__()
-        
-        # 比赛评分标准阈值 (mm)
-        thresholds_mm = [0.1, 1.0, 2.0, 5.0, 8.0]
-        
-        # 评分对齐策略权重
-        # 对应评分标准权重: (0.1, 0.1, 0.2, 0.25, 0.35)
-        # 放大 10 倍以保持数值梯度量级
-        # weights_val 对应区间: [背景, 0.1-1.0, 1.0-2.0, 2.0-5.0, 5.0-8.0, >8.0]
-        weights_val = [zero_rain_weight, 1.0, 1.0, 2.0, 2.5, 3.5]
-        
-        # 归一化阈值与缩放权重
-        normalized_thresholds = torch.tensor(thresholds_mm) / MM_MAX
-        scaled_weights = torch.tensor([w * loss_scale for w in weights_val])
-        
-        self.register_buffer('thresholds', normalized_thresholds)
-        self.register_buffer('weights', scaled_weights)
-        
-        self.rain_start_threshold = 0.1 / MM_MAX
-        self.false_alarm_penalty = false_alarm_penalty
-
-    def forward(self, pred, target, mask=None):
-        diff = torch.abs(pred - target)
-        
-        # 动态查表获取权重
-        indices = torch.bucketize(target, self.thresholds)
-        weight_map = self.weights[indices]
-        
-        # 虚警惩罚机制
-        if self.false_alarm_penalty > 0:
-            is_zero_rain = target < self.rain_start_threshold
-            is_false_alarm = is_zero_rain & (pred > self.rain_start_threshold)
-            
-            if is_false_alarm.any():
-                weight_map = weight_map.clone()
-                weight_map[is_false_alarm] *= self.false_alarm_penalty
-
-        loss = diff * weight_map
-        
-        if mask is not None:
-            loss = loss * mask
-            return loss.sum() / (mask.sum() + 1e-6)
-        
-        return loss.mean()
-
-
-class GDLoss(nn.Module):
-    """
-    梯度差分损失 (Gradient Difference Loss)。
-
-    计算预测场与真实场在水平和垂直方向上的梯度差异。
-    用于保持降水云团的边缘锐度和纹理结构，辅助提升相关性指标。
-
-    Args:
-        alpha (float): Loss 缩放系数。默认为 1.0。
-    """
-    def __init__(self, alpha=1.0):
-        super().__init__()
-        self.alpha = alpha
-
-    def forward(self, pred, target, mask=None):
-        # 计算 X/Y 方向梯度
-        p_dx = torch.abs(pred[..., :, 1:] - pred[..., :, :-1])
-        t_dx = torch.abs(target[..., :, 1:] - target[..., :, :-1])
-        p_dy = torch.abs(pred[..., 1:, :] - pred[..., :-1, :])
-        t_dy = torch.abs(target[..., 1:, :] - target[..., :-1, :])
-        
-        gdl_x = torch.abs(p_dx - t_dx)
-        gdl_y = torch.abs(p_dy - t_dy)
-        
-        if mask is not None:
-            # Mask 需要对应裁剪以匹配梯度图尺寸
-            mask_x = mask[..., :, 1:] * mask[..., :, :-1]
-            mask_y = mask[..., 1:, :] * mask[..., :-1, :]
-            
-            loss_x = (gdl_x * mask_x).sum() / (mask_x.sum() + 1e-6)
-            loss_y = (gdl_y * mask_y).sum() / (mask_y.sum() + 1e-6)
-            return (loss_x + loss_y) * self.alpha
-            
-        return (gdl_x.mean() + gdl_y.mean()) * self.alpha
-
-
-class CorrLoss(nn.Module):
-    """
-    Pearson 相关性损失 (Correlation Loss)。
-
-    直接优化相关系数 R (Loss = 1 - R)。
-    支持忽略双零背景，以确保优化方向与竞赛评测标准（仅关注有雨区域相关性）一致。
-
-    Args:
-        eps (float): 防止除零的微小量。
-        ignore_zeros (bool): 是否剔除预测和真值均为背景的区域。默认为 True。
-    """
-    def __init__(self, eps=1e-6, ignore_zeros=True):
-        super().__init__()
-        self.eps = eps
-        self.ignore_zeros = ignore_zeros
-        self.threshold = 0.1 / MM_MAX 
-
-    def forward(self, pred, target, mask=None):
-        if mask is not None:
-            mask = mask.bool()
-        else:
-            mask = torch.ones_like(pred, dtype=torch.bool)
-            
-        # 剔除双零背景：仅关注有雨区域的相关性
-        if self.ignore_zeros:
-            is_valid_rain = (pred >= self.threshold) | (target >= self.threshold)
-            mask = mask & is_valid_rain
-
-        p = pred[mask]
-        t = target[mask]
-
-        # 避免样本过少导致计算异常
-        if p.numel() < 5:
-            return torch.tensor(0.0, device=pred.device, requires_grad=True)
-
-        p_mean = p.mean()
-        t_mean = t.mean()
-
-        num = ((p - p_mean) * (t - t_mean)).sum()
-        den = torch.sqrt(((p - p_mean)**2).sum() * ((t - t_mean)**2).sum())
-
-        r = num / (den + self.eps)
-        r = torch.clamp(r, -1.0, 1.0)
-
-        return 1.0 - r
-
-
-class TSLoss(nn.Module):
-    """
-    威胁分数损失 (Threat Score Loss / Soft Dice Loss)。
-
-    通过 Sigmoid 软化阈值，计算多个关键阈值下的 Soft Dice Loss，
-    直接优化模型的 TS 评分能力。
-
-    Args:
-        weights (List[float]): 各阈值的加权系数。
-    """
-    def __init__(self, weights=[0.1, 0.1, 0.2, 0.25, 0.35]):
-        super().__init__()
-        # 对应物理阈值 [0.1, 1.0, 2.0, 5.0, 8.0]
-        self.thresholds = [x/MM_MAX for x in [0.1, 1.0, 2.0, 5.0, 8.0]]
-        self.weights = weights
-        self.smooth = 1e-5
-        self.temperature = 50.0 # Sigmoid 温度系数，值越大越接近阶跃函数
-
-    def forward(self, pred, target, mask=None):
-        loss = 0.0
-        total_w = sum(self.weights)
-        
-        for i, thresh in enumerate(self.thresholds):
-            # Soft Thresholding: 使用 Sigmoid 近似 I(x > thresh)
-            p_mask = torch.sigmoid((pred - thresh) * self.temperature)
-            t_mask = (target >= thresh).float()
-            
-            if mask is not None:
-                p_mask = p_mask * mask
-                t_mask = t_mask * mask
-
-            intersection = (p_mask * t_mask).sum()
-            union = p_mask.sum() + t_mask.sum()
-            
-            # Dice Loss = 1 - Dice Coefficient
-            dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
-            loss += (1.0 - dice) * self.weights[i]
-            
-        return loss / total_w
-
-
-class HybridLoss(nn.Module):
-    """
-    混合损失函数 (Hybrid Loss)。
-
-    组合 MAE、GDL、Corr、TS 四种损失以最大化竞赛评分。
+    竞赛评分标准计算器模块。
     
-    默认权重策略 (针对数值量级平衡优化):
-    - mae:  1.0  (基准)
-    - gdl:  10.0 (放大以匹配 MAE 量级，强化纹理)
-    - corr: 0.5  (R 是全局乘数项，需重点优化但要防止震荡)
-    - ts:   1.0  (直接优化 TS 得分)
-
+    支持 Log Space 反归一化，确保在物理空间 (mm) 计算指标。
+    
     Args:
-        l1_weight (float): MAE Loss 权重。
-        gdl_weight (float): GDL Loss 权重。
-        corr_weight (float): Correlation Loss 权重。
-        dice_weight (float): TS/Dice Loss 权重。
+        use_log_norm (bool): 输入是否为 Log 归一化数据。如果为 True，
+            会在计算前将其还原为物理值。默认为 True。
+        data_max (float): 线性归一化时的最大物理值。仅在 use_log_norm=False 时使用。
     """
-    def __init__(self, 
-                 l1_weight=1.0, 
-                 gdl_weight=10.0, 
-                 corr_weight=0.5, 
-                 dice_weight=1.0, 
-                 **kwargs):
+    
+    def __init__(self, use_log_norm: bool = True, data_max: float = 30.0):
         super().__init__()
-        self.weights = {
-            'mae': l1_weight, 
-            'gdl': gdl_weight,
-            'corr': corr_weight,
-            'ts': dice_weight
-        }
+        self.use_log_norm = use_log_norm
+        self.data_max = data_max
         
-        self.mae = MAELoss()
-        self.gdl = GDLoss()
-        self.corr = CorrLoss(ignore_zeros=True)
-        self.ts = TSLoss()
+        # Log 反变换参数: log(300 + 1)
+        self.log_factor = math.log(300.0 + 1)
+        
+        # --- 注册常量参数 (Buffer) ---
+        
+        # 1. 时效权重 (对应 6min - 120min)
+        time_weights = torch.tensor([
+            0.0075, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1,
+            0.09, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.0075, 0.005
+        ])
+        self.register_buffer('time_weights_default', time_weights)
 
-    def forward(self, pred, target, mask=None):
-        loss_dict = {}
+        # 2. 分级阈值 (mm)
+        thresholds = torch.tensor([0.1, 1.0, 2.0, 5.0, 8.0])
+        self.register_buffer('thresholds', thresholds)
+
+        # 3. 分级区间上界 (用于 Interval TS 计算)
+        inf_tensor = torch.tensor([float('inf')])
+        highs = torch.cat([thresholds[1:], inf_tensor])
+        self.register_buffer('highs', highs)
+
+        # 4. 分级权重
+        level_weights = torch.tensor([0.1, 0.1, 0.2, 0.25, 0.35])
+        self.register_buffer('level_weights', level_weights)
+
+    def forward(self, 
+                pred_norm: torch.Tensor, 
+                target_norm: torch.Tensor, 
+                mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+        """
+        计算各项评分指标。
         
-        # 计算各分项
-        mae = self.mae(pred, target, mask)
-        gdl = self.gdl(pred, target, mask)
-        corr = self.corr(pred, target, mask)
-        ts = self.ts(pred, target, mask)
+        Args:
+            pred_norm: 归一化预测值。
+            target_norm: 归一化真值。
+            mask: 有效区域掩码。
+        """
+        with torch.no_grad():
+            return self._compute(pred_norm, target_norm, mask)
+
+    def _compute(self, pred_norm, target_norm, mask):
+        # 1. 反归一化：还原为物理量 (mm)
+        if self.use_log_norm:
+            # Log Space -> Storage Space (0-300) -> Physical Space (0-30mm)
+            # norm = log(storage + 1) / factor
+            # storage = exp(norm * factor) - 1
+            pred = (torch.exp(pred_norm * self.log_factor) - 1.0) / 10.0
+            target = (torch.exp(target_norm * self.log_factor) - 1.0) / 10.0
+            
+            # 安全截断，防止数值误差产生负数
+            pred = torch.clamp(pred, 0.0, None)
+            target = torch.clamp(target, 0.0, None)
+        else:
+            # Linear Space
+            pred = pred_norm * self.data_max
+            target = target_norm * self.data_max
         
-        # 加权求和
-        total = (self.weights['mae'] * mae + 
-                 self.weights['gdl'] * gdl + 
-                 self.weights['corr'] * corr + 
-                 self.weights['ts'] * ts)
+        # 2. 维度适配处理
+        if pred.dim() == 3:
+            pred = pred.unsqueeze(1)
+            target = target.unsqueeze(1)
+            if mask is not None and mask.dim() == 3:
+                mask = mask.unsqueeze(1)
+
+        B, T, H, W = pred.shape
+        device = pred.device
         
-        # 记录日志 (保留 l1 键名以兼容 trainer 的 logging 逻辑)
-        loss_dict['total'] = total
-        loss_dict['l1'] = mae 
-        loss_dict['gdl'] = gdl
-        loss_dict['corr'] = corr
-        loss_dict['ts'] = ts
+        # 3. 基础 Mask 处理
+        if mask is None:
+            valid_mask = torch.ones((B, T, H, W), device=device, dtype=torch.bool)
+        else:
+            if mask.dim() == 5: mask = mask.squeeze(2)
+            if mask.shape[1] == 1: mask = mask.expand(-1, T, -1, -1)
+            valid_mask = mask > 0.5
+
+        # 4. 初始化容器
+        scores_k_list = []   
+        r_k_list = []        
+        ts_matrix_list = []  
+        mae_matrix_list = [] 
+
+        # 5. 遍历时效 k 进行计算
+        for k in range(T):
+            p_k = pred[:, k, ...].flatten()
+            t_k = target[:, k, ...].flatten()
+            m_k = valid_mask[:, k, ...].flatten()
+            
+            # === Part A: 计算相关系数 R_k ===
+            # 剔除预测值和观测值同时 < 0.1 的背景点
+            min_thresh = self.thresholds[0]
+            is_double_zero = (p_k < min_thresh) & (t_k < min_thresh)
+            mask_corr = m_k & (~is_double_zero)
+            
+            if mask_corr.sum() > 0:
+                p_c = p_k[mask_corr]
+                t_c = t_k[mask_corr]
+                p_mean, t_mean = p_c.mean(), t_c.mean()
+                
+                num = ((p_c - p_mean) * (t_c - t_mean)).sum()
+                den = torch.sqrt(((p_c - p_mean)**2).sum() * ((t_c - t_mean)**2).sum())
+                
+                R_k = num / (den + 1e-6)
+                R_k = torch.clamp(R_k, -1.0, 1.0)
+            else:
+                R_k = torch.tensor(0.0, device=device)
+            
+            r_k_list.append(R_k)
+            term_corr = torch.sqrt(torch.exp(R_k - 1))
+
+            # === Part B: 计算区间 TS & 区间 MAE ===
+            low_b = self.thresholds.unsqueeze(1) # [L, 1]
+            high_b = self.highs.unsqueeze(1)     # [L, 1]
+            
+            p_v = p_k[m_k]
+            t_v = t_k[m_k]
+            
+            L = self.thresholds.shape[0]
+            
+            if p_v.numel() == 0:
+                ts_vec = torch.zeros(L, device=device)
+                mae_vec = torch.zeros(L, device=device)
+            else:
+                p_ex = p_v.unsqueeze(0) 
+                t_ex = t_v.unsqueeze(0) 
+                
+                # --- 区间 TS (Interval TS) ---
+                # 判定: 值必须落在 [low, high) 区间内
+                is_p_in = (p_ex >= low_b) & (p_ex < high_b)
+                is_t_in = (t_ex >= low_b) & (t_ex < high_b)
+                
+                # Hit: 预测和实况落在同一区间
+                hits = (is_p_in & is_t_in).float().sum(dim=1)
+                # Miss: 实况在区间，预测不在
+                misses = ((~is_p_in) & is_t_in).float().sum(dim=1)
+                # FA: 预测在区间，实况不在
+                fas = (is_p_in & (~is_t_in)).float().sum(dim=1)
+                
+                ts_vec = hits / (hits + misses + fas + 1e-8)
+                
+                # --- 区间 MAE (Interval MAE) ---
+                mae_list = []
+                for i in range(L):
+                    # 获取实况落在第 i 个区间的 Mask
+                    mask_level = is_t_in[i, :] 
+                    
+                    n_b = mask_level.sum()
+                    if n_b > 0:
+                        err = (torch.abs(p_v - t_v) * mask_level).sum() / n_b
+                    else:
+                        err = torch.tensor(0.0, device=device)
+                    mae_list.append(err)
+                mae_vec = torch.stack(mae_list)
+
+            ts_matrix_list.append(ts_vec)
+            mae_matrix_list.append(mae_vec)
+            
+            # === Part C: 计算单项评分 Score_k ===
+            term_mae = torch.sqrt(torch.exp(-mae_vec / 100.0))
+            sum_level_metrics = (self.level_weights * ts_vec * term_mae).sum()
+            
+            Score_k = term_corr * sum_level_metrics
+            scores_k_list.append(Score_k)
+
+        # 6. 结果聚合
+        scores_time = torch.stack(scores_k_list)
+        r_time = torch.stack(r_k_list)
+        ts_time_matrix = torch.stack(ts_matrix_list)
+        mae_time_matrix = torch.stack(mae_matrix_list)
         
-        return total, loss_dict
+        ts_levels = ts_time_matrix.mean(dim=0)
+        mae_levels = mae_time_matrix.mean(dim=0)
+        
+        # 7. 计算时间加权总分
+        if T == len(self.time_weights_default):
+            w_time = self.time_weights_default
+        elif T < len(self.time_weights_default):
+            w_time = self.time_weights_default[:T]
+            w_time = w_time / w_time.sum()
+        else:
+            w_time = torch.ones(T, device=device) / T
+            
+        total_score = (scores_time * w_time).sum()
+        
+        return {
+            'total_score': total_score,
+            'score_time': scores_time,
+            'r_time': r_time,
+            'ts_time': ts_time_matrix,
+            'mae_time': mae_time_matrix,
+            'ts_levels': ts_levels,
+            'mae_levels': mae_levels
+        }
+
+
+class MetricTracker:
+    """
+    指标累加器模块。
+
+    用于在验证或测试循环中累积 Batch 结果并计算平均值。
+    """
+    def __init__(self):
+        self.reset()
+        
+    def reset(self):
+        self.count = 0
+        self.metrics_sum = {}
+        
+    def update(self, metrics: Dict[str, torch.Tensor]):
+        """累积单个 Batch 的指标结果"""
+        self.count += 1
+        for k, v in metrics.items():
+            val = v.detach().cpu()
+            if k not in self.metrics_sum:
+                self.metrics_sum[k] = torch.zeros_like(val)
+            self.metrics_sum[k] += val
+            
+    def compute(self) -> Dict[str, object]:
+        """计算所有累积 Batch 的平均指标"""
+        if self.count == 0:
+            return {}
+        
+        results = {}
+        for k, v in self.metrics_sum.items():
+            results[k] = v / self.count
+            
+        return results
