@@ -22,7 +22,8 @@ MODE=$1
 DEVICES="[1,2,3]" 
 DATA_PATH="data/samples.jsonl"
 SAVE_DIR="./output" # 修改输出目录以免覆盖旧实验
-
+BATCH_SIZE=4
+# --ckpt_path /home/yyj/code/output/lightning_logs/version_6/checkpoints/last.ckpt \
 case $MODE in
     "train")
         echo "--------------------------------------------------------"
@@ -49,6 +50,7 @@ case $MODE in
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
             --trainer.callbacks.patience 30 \
+            --model.batch_size $BATCH_SIZE \
             --model.in_shape "[31, 256, 256]" \
             --model.obs_seq_len 10 \
             --model.pred_seq_len 20 \
@@ -60,12 +62,9 @@ case $MODE in
             --model.mamba_d_conv 4 \
             --model.mamba_expand 2 \
             --model.use_curriculum_learning false \
-            --model.loss_weight_l1 1.0 \
-            --model.loss_weight_gdl 5.0 \
             --data.data_path $DATA_PATH \
-            --data.batch_size 4 \
-            --data.num_workers 16 \
-            --data.aft_seq_length 20 
+            --data.batch_size $BATCH_SIZE \
+            --data.num_workers 8 \
         ;;
         
     "test")
@@ -87,13 +86,14 @@ case $MODE in
         # [Update] 这里的参数已更新为匹配 test_scwds_mamba.py 的新接口
         python run/test_scwds_mamba.py \
             --ckpt_path "$CKPT_PATH" \
-            --save_dir "$SAVE_DIR/vis_check" \
-            --num_samples 10 \
+            --save_dir "$SAVE_DIR" \
             --data_path "$DATA_PATH" \
-            --accelerator cuda:0 \
             --in_shape 31 256 256 \
             --obs_seq_len 10 \
-            --pred_seq_len 20
+            --pred_seq_len 20 \
+            --num_samples 10 \
+            --accelerator cuda:0 \
+            
         ;;
         
     *)

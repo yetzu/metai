@@ -8,11 +8,6 @@ class MetScore(nn.Module):
     竞赛评分标准计算器模块。
     
     支持 Log Space 反归一化，确保在物理空间 (mm) 计算指标。
-    
-    Args:
-        use_log_norm (bool): 输入是否为 Log 归一化数据。如果为 True，
-            会在计算前将其还原为物理值。默认为 True。
-        data_max (float): 线性归一化时的最大物理值。仅在 use_log_norm=False 时使用。
     """
     
     def __init__(self, use_log_norm: bool = True, data_max: float = 30.0):
@@ -51,11 +46,6 @@ class MetScore(nn.Module):
                 mask: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """
         计算各项评分指标。
-        
-        Args:
-            pred_norm: 归一化预测值。
-            target_norm: 归一化真值。
-            mask: 有效区域掩码。
         """
         with torch.no_grad():
             return self._compute(pred_norm, target_norm, mask)
@@ -63,9 +53,6 @@ class MetScore(nn.Module):
     def _compute(self, pred_norm, target_norm, mask):
         # 1. 反归一化：还原为物理量 (mm)
         if self.use_log_norm:
-            # Log Space -> Physical Space (0-30mm)
-            # norm = log(mm + 1) / factor
-            # mm = exp(norm * factor) - 1
             pred = torch.expm1(pred_norm * self.log_factor)
             target = torch.expm1(target_norm * self.log_factor)
             
@@ -77,13 +64,26 @@ class MetScore(nn.Module):
             pred = pred_norm * self.data_max
             target = target_norm * self.data_max
         
-        # 2. 维度适配处理
+        # ==========================================
+        # [关键修复] 维度适配处理：处理 5D 输入
+        # (B, T, C, H, W) -> (B, T, H, W)
+        # ==========================================
+        if pred.dim() == 5 and pred.shape[2] == 1:
+            pred = pred.squeeze(2)
+            target = target.squeeze(2)
+            
+        if mask is not None and mask.dim() == 5:
+            if mask.shape[2] == 1:
+                mask = mask.squeeze(2)
+
+        # 2. 维度适配处理 (兼容旧逻辑)
         if pred.dim() == 3:
             pred = pred.unsqueeze(1)
             target = target.unsqueeze(1)
             if mask is not None and mask.dim() == 3:
                 mask = mask.unsqueeze(1)
 
+        # 现在这里可以安全解包了，pred 必定是 4 维 (B, T, H, W)
         B, T, H, W = pred.shape
         device = pred.device
         
@@ -91,8 +91,10 @@ class MetScore(nn.Module):
         if mask is None:
             valid_mask = torch.ones((B, T, H, W), device=device, dtype=torch.bool)
         else:
-            if mask.dim() == 5: mask = mask.squeeze(2)
-            if mask.shape[1] == 1: mask = mask.expand(-1, T, -1, -1)
+            # 确保 mask 维度与 pred 一致，如果 mask 是 (B, 1, H, W) 则扩展
+            if mask.shape != pred.shape:
+                if mask.dim() == 4 and mask.shape[1] == 1:
+                     mask = mask.expand(-1, T, -1, -1)
             valid_mask = mask > 0.5
 
         # 4. 初始化容器

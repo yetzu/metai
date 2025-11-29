@@ -30,10 +30,15 @@ class MeteoMambaModule(l.LightningModule):
                 if hasattr(self.config, k):
                     setattr(self.config, k, v)
 
-        # 2. 保存超参数
-        self.save_hyperparameters(self.config.to_dict())
+        # 2. 保存超参数 [关键修改]
+        # 移除与 DataModule 冲突的参数 (batch_size, data_path)
+        # 这样 Lightning 就不会因为参数值不一致而报错
+        hparams = self.config.to_dict()
+        hparams.pop('batch_size', None)
+        hparams.pop('data_path', None)
+        self.save_hyperparameters(hparams)
         
-        # 3. 初始化模型 [修改]
+        # 3. 初始化模型
         self.model = MeteoMamba(
             in_shape=self.config.in_shape,      # (C, H, W)
             in_seq_len=self.config.obs_seq_len, # T_in
@@ -96,9 +101,9 @@ class MeteoMambaModule(l.LightningModule):
         loss, loss_dict = self.criterion(pred, y, mask=t_mask)
         
         bs = x.size(0)
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=bs)
-        self.log('loss_l1', loss_dict.get('l1', 0), on_step=False, on_epoch=True, prog_bar=False, batch_size=bs)
-        self.log('loss_gdl', loss_dict.get('gdl', 0), on_step=False, on_epoch=True, prog_bar=False, batch_size=bs)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
+        self.log('loss_l1', loss_dict.get('l1', 0), on_step=False, on_epoch=True, prog_bar=False, batch_size=bs, sync_dist=True)
+        self.log('loss_gdl', loss_dict.get('gdl', 0), on_step=False, on_epoch=True, prog_bar=False, batch_size=bs, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -115,8 +120,8 @@ class MeteoMambaModule(l.LightningModule):
         val_score = metric_results['total_score']
 
         bs = x.size(0)
-        self.log('val_loss', loss, on_epoch=True, sync_dist=True, prog_bar=True, batch_size=bs)
-        self.log('val_score', val_score, on_epoch=True, sync_dist=True, prog_bar=True, batch_size=bs)
+        self.log('val_loss', loss, on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
+        self.log('val_score', val_score, on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
         _, x, y, _, t_mask = batch

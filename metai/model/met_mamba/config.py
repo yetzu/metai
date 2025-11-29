@@ -27,7 +27,7 @@ class ModelConfig(BaseModel):
     mamba_expand: int = 2
     
     # --- 训练参数 ---
-    batch_size: int = 32 
+    batch_size: int = 4 
     accumulate_grad_batches: int = 1 
     max_epochs: int = 100
     
