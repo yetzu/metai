@@ -182,3 +182,6 @@ tmp/
 output/
 lightning_logs/
 bak/
+
+*.log
+*.log.txt
