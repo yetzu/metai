@@ -244,8 +244,18 @@ class MetSample:
     def _get_env(self) -> lmdb.Environment:
         """惰性加载 LMDB 环境。"""
         if self._lmdb_env is None:
-            # [Fix] Ensure region_id and lmdb_root are strings for path join
-            db_path = os.path.join(str(self.lmdb_root), f"{self.region_id}.lmdb")
+            
+            # 1. 训练模式 (is_train=True): 数据按区域分散在不同文件 (如 AH.lmdb, ZJ.lmdb)，使用 region_id。
+            # 2. 推理模式 (is_train=False): 数据统一打包在一个文件 (如 TestSet.lmdb)，使用 testset_name。
+            
+            if self.is_train:
+                db_filename = self.region_id
+            else:
+                db_filename = self.testset_name
+            
+            db_path = os.path.join(str(self.lmdb_root), f"{db_filename}.lmdb")
+            # [修改结束] ==========================================
+
             if self.verbose:
                 print(f"[MetSample] Opening LMDB: {db_path}")
             

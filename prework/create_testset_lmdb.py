@@ -35,17 +35,16 @@ JSONL_PATH_DEFAULT = "./data/samples.testset.jsonl"
 OUTPUT_DIR_DEFAULT = "/data/zjobs/LMDB"
 
 TARGET_SIZE = 256
-MAP_SIZE = 1024 * 1024 * 1024 * 3072  # 3TB (调大容量以容纳所有数据)
+MAP_SIZE = 1024 * 1024 * 1024 * 1024  # 1TB (调大容量以容纳所有数据)
 COMMIT_INTERVAL = 2000
 ZLIB_LEVEL = 1
 
-# [配置] 数据集目录名称
-DEFAULT_DATASET = "TestSet"
+# [配置] 数据集目录名称 & 目标输出文件名 (统一使用此变量)
+# 注意：这要求源数据文件夹名称与期望的 LMDB 文件名一致 (例如都为 "TestSetA")
+DEFAULT_DATASET = "TestSet" 
+
 DEFAULT_NWP_PREFIX = getattr(cfg, 'nwp_prefix', 'RRA')
 DATE_FMT = getattr(cfg, 'file_date_format', '%m%d-%H%M')
-
-# 目标输出文件名 (不带后缀)
-TARGET_LMDB_NAME = "TestSetA"
 
 _DEFAULT_CHANNELS: List[MetVarType] = [
     MetLabel.RA, 
@@ -93,8 +92,7 @@ def get_nwp_timestamp(ts_str):
         return ts_str
 
 def construct_paths(root_path, meta, ts_raw):
-    # 这里依然使用 meta['region_id'] 来定位源文件所在的文件夹
-    # 即使我们最终写入同一个 LMDB，源文件还是按区域存放的
+    # 使用 DEFAULT_DATASET 定位源文件所在的文件夹
     base_dir = os.path.join(
         root_path, meta['task_id'], DEFAULT_DATASET, meta['region_id'], meta['case_id']
     )
@@ -145,8 +143,9 @@ def write_region_lmdb(name_key, file_info_list, output_dir, root_path):
     try:
         for abs_path, channel in pbar:
             try:
-                # Key 的构造逻辑不变，保持 Task/TestSet/Region/Case/...
-                # 这样即使在同一个文件中，也能通过 Key 前缀区分（如果需要的话）
+                # Key 的构造逻辑不变，保持 Task/Dataset/Region/Case/...
+                # 这里会隐式使用 DEFAULT_DATASET 生成的路径结构，或者你可以选择在 Key 中硬编码 dataset 名称
+                # 为保持一致性，Key 建议使用实际路径的相对路径
                 rel_path = os.path.relpath(abs_path, root_path)
                 key = rel_path.replace("\\", "/").encode('ascii')
                 
@@ -207,8 +206,6 @@ def write_region_lmdb(name_key, file_info_list, output_dir, root_path):
                     # --- B. 文件不存在 (测试集补0策略) ---
                     missing_count += 1
                     
-                    # 仅针对 Label RA 补一个全 False 的 Mask，保证 Dataset 读取不崩
-                    # 测试集通常没有 Label，但 DataModule 逻辑可能还是会尝试读取
                     if channel == MetLabel.RA:
                         mask = np.zeros((TARGET_SIZE, TARGET_SIZE), dtype=bool)
                         key_str = key.decode('ascii')
@@ -242,8 +239,8 @@ def process_task_wrapper(args):
     return write_region_lmdb(*args)
 
 def scan_tasks(jsonl_path, root_path):
-    # [修改] 强制使用单个 key 来聚合所有数据
-    single_task_key = TARGET_LMDB_NAME
+    # [修改] 强制使用单个 key (DEFAULT_DATASET) 来聚合所有数据
+    single_task_key = DEFAULT_DATASET
     tasks = {single_task_key: []} 
     
     MLOGI(f"Scanning TestSet JSONL: {jsonl_path}")
@@ -262,7 +259,7 @@ def scan_tasks(jsonl_path, root_path):
             rec = json.loads(line)
             meta = parse_sample_id(rec['sample_id'])
             
-            # 不再使用 meta['region_id'] 作为 key，而是全部放入 single_task_key
+            # 使用 meta 计算路径，全部放入 single_task_key
             for ts in rec['timestamps']:
                 tasks[single_task_key].extend(construct_paths(root_path, meta, ts))
         except Exception as e:
@@ -274,14 +271,12 @@ def main():
     parser.add_argument("--jsonl", type=str, default=JSONL_PATH_DEFAULT)
     parser.add_argument("--output", type=str, default=OUTPUT_DIR_DEFAULT)
     parser.add_argument("--root", type=str, default=ROOT_PATH_DEFAULT)
-    # 对于单个 LMDB 文件的写入，必须强制单进程，否则 LMDB 会锁冲突
-    # 我们依然保留 workers 参数接口但仅用于兼容性，实际只启动一个任务
     parser.add_argument("--workers", type=int, default=1)
     args = parser.parse_args()
     
     MLOGI("================ CONFIG (TESTSET SINGLE FILE) ================")
     MLOGI(f"Source Root : {args.root}")
-    MLOGI(f"Target Name : {TARGET_LMDB_NAME}.lmdb")
+    MLOGI(f"Target Name : {DEFAULT_DATASET}.lmdb") # 使用 DEFAULT_DATASET
     MLOGI(f"JSONL Index : {args.jsonl}")
     MLOGI(f"Output Dir  : {args.output}")
     MLOGI("==============================================================")
@@ -291,7 +286,7 @@ def main():
         MLOGE("No tasks found.")
         return
 
-    # 这里实际上只有 1 个任务: ('TestSetA', all_files, ...)
+    # 这里实际上只有 1 个任务: (DEFAULT_DATASET, all_files, ...)
     job_args = []
     for name_key, file_infos in tasks.items():
         # 去重
@@ -299,11 +294,9 @@ def main():
         unique_infos = list(unique_map.items())
         job_args.append((name_key, unique_infos, args.output, args.root))
 
-    # 因为写入同一个文件，LMDB 不支持多进程并发写（除非极其复杂的配置），
-    # 所以这里只能有一个 Worker 处理这个巨大的列表。
-    MLOGI(f"Starting processing... (Single Writer for {TARGET_LMDB_NAME})")
+    MLOGI(f"Starting processing... (Single Writer for {DEFAULT_DATASET})")
 
-    # 使用 ProcessPoolExecutor(max_workers=1) 或直接调用
+    # 使用 ProcessPoolExecutor(max_workers=1)
     with ProcessPoolExecutor(max_workers=1) as executor:
         results = list(tqdm(
             executor.map(process_task_wrapper, job_args), 
@@ -313,7 +306,7 @@ def main():
             position=0
         ))
 
-    MLOGI(f"All Done. LMDB saved to {os.path.join(args.output, TARGET_LMDB_NAME + '.lmdb')}")
+    MLOGI(f"All Done. LMDB saved to {os.path.join(args.output, DEFAULT_DATASET + '.lmdb')}")
 
 if __name__ == "__main__":
     main()

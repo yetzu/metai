@@ -31,6 +31,7 @@ case $MODE in
         echo "--------------------------------------------------------"
 
         python run/train_scwds_mamba.py fit \
+            --ckpt_path /home/yyj/code/output/lightning_logs/version_0/checkpoints/last.ckpt \
             --seed_everything 42 \
             --trainer.default_root_dir $SAVE_DIR \
             --trainer.accelerator cuda \

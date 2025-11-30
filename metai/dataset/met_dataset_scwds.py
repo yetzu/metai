@@ -64,7 +64,6 @@ class ScwdsDataset(Dataset):
         self.samples = self._load_samples_from_jsonl(data_path)
         self.is_train = is_train
         self.testset_name = testset_name
-        self.lmdb_filename = lmdb_filename
         
         # [优化] 初始化阶段的冗余检测 (Redundancy Check)
         # MetSample 默认输出 256x256。如果目标尺寸也是 256x256，则强制置为 None 以关闭所有 Resize 逻辑。
@@ -152,8 +151,12 @@ class ScwdsDataset(Dataset):
         )
         
         # 2. LMDB 环境注入 (Environment Injection)
-        # 如果指定了 lmdb_filename (如 "TestSetA")，则用它；否则回退使用 region_id (如 AH, CP)
-        db_key = self.lmdb_filename if self.lmdb_filename else sample.region_id
+        if self.is_train:
+            # 训练时按区域读取 (例如 AH.lmdb)
+            db_key = sample.region_id
+        else:
+            # 推理时读取统一的测试集文件 (例如 TestSet.lmdb)
+            db_key = self.testset_name
  
         if db_key not in self.envs:
             try:
@@ -243,8 +246,7 @@ class ScwdsDataModule(LightningDataModule):
         val_split: float = 0.1,
         test_split: float = 0.1,
         seed: int = 42,
-        testset_name: str = "TestSet", 
-        test_lmdb_name: str = "TestSetA"
+        testset_name: str = "TestSet"
     ):
         super().__init__()
         # [重要] 保存超参数，以便 Checkpoint 加载时能恢复 DataModule 配置
@@ -261,7 +263,6 @@ class ScwdsDataModule(LightningDataModule):
         self.seed = seed
 
         self.testset_name = testset_name
-        self.test_lmdb_name = test_lmdb_name
 
     def setup(self, stage: Optional[str] = None):
         """
@@ -273,8 +274,7 @@ class ScwdsDataModule(LightningDataModule):
                 self.data_path, 
                 is_train=False,
                 resize_shape=self.resize_shape,
-                testset_name=self.testset_name,
-                lmdb_filename=self.test_lmdb_name
+                testset_name=self.testset_name
             )
             MLOGI(f"Infer dataset size: {len(self.infer_dataset)}")
             return
