@@ -38,13 +38,13 @@ case $MODE in
             --trainer.strategy ddp \
             --trainer.precision bf16-mixed \
             --trainer.max_epochs 100 \
-            --trainer.log_every_n_steps 50 \
+            --trainer.log_every_n_steps 100 \
             --trainer.accumulate_grad_batches 1 \
             --trainer.gradient_clip_val 1.0 \
             --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
-            --trainer.callbacks.save_top_k 10 \
+            --trainer.callbacks.save_top_k -1 \
             --trainer.callbacks.save_last true \
             --trainer.callbacks.filename "{epoch:02d}-{val_score:.4f}" \
             --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
@@ -63,7 +63,7 @@ case $MODE in
             --model.mamba_d_conv 4 \
             --model.mamba_expand 2 \
             --model.use_checkpoint true \
-            --model.warmup_epoch 10 \
+            --model.warmup_epoch 20 \
             --model.lr 1e-3 \
             --model.min_lr 1e-6 \
             --model.weight_focal 2.0 \

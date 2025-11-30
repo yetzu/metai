@@ -41,7 +41,7 @@ class ModelConfig(BaseModel):
     sched: str = "cosine"
     decay_epoch: int = 30 
     decay_rate: float = 0.1
-    use_curriculum_learning: bool = False 
+    use_curriculum_learning: bool = True 
     
     # --- 损失权重 (Unified Naming) ---
     weight_focal: float = 1.0   # FocalLoss

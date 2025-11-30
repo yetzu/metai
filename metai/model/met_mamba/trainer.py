@@ -89,15 +89,18 @@ class MeteoMambaModule(l.LightningModule):
             scheduler.step(metric) if metric is not None else scheduler.step()
 
     # =========================================================
-    # [新增] 课程学习调度器 (Curriculum Learning Scheduler)
+    # [修复版] 课程学习调度器 (动态读取 Config)
     # =========================================================
     def on_train_epoch_start(self):
         """
         动态调整 Loss 权重：
-        - 初期 (Warmup): 仅使用 Focal Loss (L1变体) 学习基础形状。
-        - 中期 (Ramp-up): 线性增加 Grad, Dice, Corr 权重。
-        - 后期 (Full): 使用完整权重进行精调。
+        - 阶段1 (L1 Only): 前 1/3 的 warmup 周期，仅使用 Focal Loss 学习基础分布。
+        - 阶段2 (Ramp-up): 剩余 warmup 周期，线性增加 Grad/Dice/Corr 权重。
+        - 阶段3 (Full): warmup 结束后，使用全权重精调。
         """
+        if not self.config.use_curriculum_learning:
+            return
+
         epoch = self.current_epoch
         
         # 1. 获取配置中的最终目标权重
@@ -105,33 +108,37 @@ class MeteoMambaModule(l.LightningModule):
         target_dice = self.config.weight_dice
         target_corr = self.config.weight_corr
         
-        # 2. 定义阶段阈值
-        WARMUP_EPOCHS = 5    # 前 5 轮：只学 L1
-        RAMPUP_EPOCHS = 15   # 5-20 轮：线性增加其他 Loss
+        # 2. 动态计算阶段阈值 (基于 config.warmup_epoch)
+        # 策略：前 30% 的时间只学 L1，剩下 70% 的时间线性增加难度
+        total_warmup = self.config.warmup_epoch
+        phase_1_end = int(total_warmup * 0.4) 
+        phase_2_end = total_warmup
         
         # 3. 计算当前权重系数 (0.0 -> 1.0)
-        if epoch < WARMUP_EPOCHS:
+        if epoch < phase_1_end:
+            # 阶段1: 纯净 L1 模式，让模型先学会“哪里有雨”
             alpha = 0.0
-        elif epoch < (WARMUP_EPOCHS + RAMPUP_EPOCHS):
-            alpha = (epoch - WARMUP_EPOCHS) / float(RAMPUP_EPOCHS)
+        elif epoch < phase_2_end:
+            # 阶段2: 线性增长，逐渐引入纹理(Grad)和评分(Dice)约束
+            progress = (epoch - phase_1_end) / float(phase_2_end - phase_1_end)
+            alpha = progress
         else:
+            # 阶段3: 全开模式
             alpha = 1.0
             
         # 4. 更新 Loss 模块内部的权重
-        # 注意：这里直接修改 self.criterion.weights 字典
         if hasattr(self.criterion, 'weights'):
             self.criterion.weights['grad'] = target_grad * alpha
             self.criterion.weights['dice'] = target_dice * alpha
             self.criterion.weights['corr'] = target_corr * alpha
             
-            # (可选) Focal 权重通常保持不变，或者前期略大
+            # Focal 权重保持不变 (作为基础引导)
             # self.criterion.weights['focal'] = self.config.weight_focal 
 
-        # 5. 记录日志以便监控 (Record to TensorBoard/WandB)
+        # 5. 记录日志 (这对监控是否过早引入复杂 Loss 非常重要)
         self.log_dict({
             'curriculum/alpha': alpha,
-            'curriculum/w_grad': self.criterion.weights['grad'],
-            'curriculum/w_dice': self.criterion.weights['dice']
+            'curriculum/phase': 1.0 if epoch < phase_1_end else (2.0 if epoch < phase_2_end else 3.0)
         }, on_step=False, on_epoch=True, sync_dist=True)
 
     def training_step(self, batch, batch_idx):
