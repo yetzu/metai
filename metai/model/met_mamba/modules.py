@@ -16,17 +16,13 @@ except ImportError:
     class Mamba(nn.Module):
         def __init__(self, *args, **kwargs):
             super().__init__()
-            raise ImportError("Please install 'mamba_ssm'")
+            raise ImportError("Please install 'mamba_ssm': pip install mamba-ssm")
 
 # ==========================================
-# 0. 基础组件 (RMSNorm & Conv)
+# 基础组件
 # ==========================================
 
 class RMSNorm(nn.Module):
-    """
-    [新增] Root Mean Square Layer Normalization
-    相比 LayerNorm 去除了均值中心化，数值稳定性更好，适合混合精度训练。
-    """
     def __init__(self, d_model: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps
@@ -41,9 +37,7 @@ class BasicConv2d(nn.Module):
                  dilation=1, upsampling=False, act_norm=False):
         super().__init__()
         self.act_norm = act_norm
-        
         if upsampling:
-            # 传统的上采样方式 (PixelShuffle)，保留用于 ConvSC 的兼容性
             self.conv = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels*4, kernel_size, stride, padding, dilation),
                 nn.PixelShuffle(2)
@@ -67,10 +61,6 @@ class BasicConv2d(nn.Module):
         return y
 
 class ConvSC(nn.Module):
-    """
-    Skip-Connection Convolution Block
-    用于 Encoder 和 Decoder 的基础层
-    """
     def __init__(self, C_in, C_out, kernel_size=3, downsampling=False, upsampling=False, act_norm=True):
         super().__init__()
         stride = 2 if downsampling else 1
@@ -82,20 +72,13 @@ class ConvSC(nn.Module):
 
 class ResizeConv(nn.Module):
     """
-    [新增] Resize-Convolution 上采样模块
-    
-    使用 "双线性插值 + 卷积" 替代 PixelShuffle。
-    优势：能有效消除稀疏降水场预测中的棋盘格伪影 (Checkerboard Artifacts)。
+    使用 "双线性插值 + 卷积" 替代 PixelShuffle，消除棋盘格伪影。
     """
     def __init__(self, in_channels, out_channels, kernel_size=3, act_norm=True):
         super().__init__()
-        # 1. 双线性插值上采样 (Scale=2)
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        
-        # 2. 卷积修正特征
         padding = kernel_size // 2
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, padding=padding)
-        
         self.norm = nn.GroupNorm(2, out_channels) if act_norm else nn.Identity()
         self.act = nn.SiLU(inplace=True) if act_norm else nn.Identity()
         self.apply(self._init_weights)
@@ -112,17 +95,11 @@ class ResizeConv(nn.Module):
         return x
 
 class LocalityEnhancedMLP(nn.Module):
-    """
-    局部增强 MLP
-    在 FFN 中引入深度可分离卷积 (Depth-wise Conv) 来增强局部空间感知能力。
-    """
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-        
         self.fc1 = nn.Linear(in_features, hidden_features)
-        # DW Conv: 增强局部性
         self.dwconv = nn.Conv2d(hidden_features, hidden_features, 3, 1, 1, bias=True, groups=hidden_features)
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
@@ -130,27 +107,19 @@ class LocalityEnhancedMLP(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if m.bias is not None: nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.Conv2d):
+        if isinstance(m, (nn.Linear, nn.Conv2d)):
             trunc_normal_(m.weight, std=.02)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
 
     def forward(self, x, H, W):
-        # x: [B, L, C] 
-        # L 可能是 H*W (单帧) 或 T*H*W (多帧扁平化)
+        # x: [B, L, C]
         x = self.fc1(x)
         B, L, C = x.shape
-        
-        # 自动推断 T 维度
         T = L // (H * W)
         
-        # Reshape 为 (B*T, C, H, W) 进行 2D 卷积
+        # Reshape for DWConv: [B*T, C, H, W]
         x_spatial = x.view(B * T, H, W, C).permute(0, 3, 1, 2)
         x_spatial = self.dwconv(x_spatial)
-        
-        # 还原回序列形状 [B, L, C]
         x = x_spatial.permute(0, 2, 3, 1).view(B, L, C)
         
         x = self.act(x)
@@ -160,10 +129,6 @@ class LocalityEnhancedMLP(nn.Module):
         return x
 
 class TimeAlignBlock(nn.Module):
-    """
-    时间对齐模块
-    用于 Skip Connection 中，将 Encoder 的时间步 T_in 投影到 Decoder 的 T_out。
-    """
     def __init__(self, t_in, t_out, dim):
         super().__init__()
         self.time_proj = nn.Linear(t_in, t_out)
@@ -172,13 +137,8 @@ class TimeAlignBlock(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            nn.init.normal_(m.weight, mean=0.0, std=0.01)
-            with torch.no_grad():
-                if m.weight.shape[1] > 0: m.weight[:, -1].fill_(1.0)
+            trunc_normal_(m.weight, std=.02)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x):
         # x: [B, T_in, C, H, W]
@@ -193,85 +153,75 @@ class TimeAlignBlock(nn.Module):
         return x
 
 # ==========================================
-# 2. 核心 Mamba 模块 (Spatio-Temporal)
+# 核心 Mamba 模块
 # ==========================================
 
 class STMambaBlock(nn.Module):
     """
-    [改进核心] STMambaBlock (Spatio-Temporal Mamba Block)
-    
-    不同于分别处理空间和时间的传统做法，本模块将时间维度 T 展开到序列长度中 
-    (SeqLen = T * H * W)，利用 Mamba 的线性复杂度优势，
-    一次性对整个时空体 (Spatio-Temporal Volume) 进行因果扫描。
-    
-    特性：
-    1. 连续性：隐状态 (Hidden State) 可以在帧与帧之间传递。
-    2. 双向性：采用正向+反向扫描，增强历史与未来信息的交互。
-    3. 显存优化：支持 gradient checkpointing，防止长序列显存爆炸。
-    4. 稳定性：使用 RMSNorm。
+    Spatio-Temporal Mamba Block with Multi-directional Scan (H + V)
     """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, 
                  d_state=16, d_conv=4, expand=2, use_checkpoint=False):
         super().__init__()
         self.use_checkpoint = use_checkpoint
-        
-        # [修改] 使用 RMSNorm
         self.norm1 = RMSNorm(dim)
-        
-        # Mamba 核心配置
         mamba_cfg = dict(d_model=dim, d_state=d_state, d_conv=d_conv, expand=expand)
         self.scan = Mamba(**mamba_cfg)
-        
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        
-        # [修改] 使用 RMSNorm
         self.norm2 = RMSNorm(dim)
-        
-        # MLP 部分
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = LocalityEnhancedMLP(dim, mlp_hidden_dim, dim, act_layer=act_layer, drop=drop)
-        
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm) or isinstance(m, RMSNorm):
-            if hasattr(m, 'bias') and m.bias is not None: nn.init.constant_(m.bias, 0)
-            if hasattr(m, 'weight') and m.weight is not None: nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x_in):
         # x_in: [B, T, C, H, W]
         B, T, C, H, W = x_in.shape
         L = T * H * W
         
-        # 1. 展开为长序列 [B, L, C]
-        # 此时序列的物理意义是：第1帧全部像素 -> 第2帧全部像素 -> ... -> 第T帧
+        # 1. Prepare sequence: [B, L, C] (Row-Major)
         x = x_in.permute(0, 1, 3, 4, 2).contiguous().reshape(B, L, C)
         
-        # 2. 连续 Mamba 扫描 (支持 Checkpoint)
-        if self.use_checkpoint and x.requires_grad:
-            # 定义闭包用于 checkpoint
-            def scan_forward(z):
-                return self.scan(z) + self.scan(z.flip([1])).flip([1])
+        def scan_multidir(z_row, B, T, H, W, C):
+            """
+            Internal function for checkpointing. 
+            Explicitly passing dimensions ensures safety.
+            """
+            L = T * H * W
             
-            shortcut = x
-            x_norm = self.norm1(x)
-            # 使用 checkpoint 包裹高显存操作
-            out = checkpoint(scan_forward, x_norm, use_reentrant=False)
-            x = shortcut + self.drop_path(out)
-        else:
-            shortcut = x
-            x = self.norm1(x)
-            out = self.scan(x) + self.scan(x.flip([1])).flip([1])
-            x = shortcut + self.drop_path(out)
+            # --- 1. Horizontal Scan ---
+            # Forward + Backward
+            out_h = self.scan(z_row) + self.scan(z_row.flip([1])).flip([1])
+            
+            # --- 2. Vertical Scan ---
+            # [B, L, C] -> [B, T, H, W, C] -> [B, T, W, H, C]
+            z_col = z_row.view(B, T, H, W, C).permute(0, 1, 3, 2, 4).contiguous().reshape(B, L, C)
+            
+            out_v = self.scan(z_col) + self.scan(z_col.flip([1])).flip([1])
+            
+            # Restore view: [B, T, W, H, C] -> [B, T, H, W, C] -> [B, L, C]
+            out_v = out_v.view(B, T, W, H, C).permute(0, 1, 3, 2, 4).contiguous().reshape(B, L, C)
+            
+            return out_h + out_v
+
+        # 2. Execution with Checkpoint Support
+        shortcut = x
+        x_norm = self.norm1(x)
         
-        # 3. 局部增强 MLP
-        # LocalityEnhancedMLP 内部会将长序列 Reshape 为 (B*T, C, H, W) 
-        # 进行 DW-Conv，从而提取每帧内部的空间纹理特征
-        # 这里需要传入 H, W 供 MLP 内部 reshape 使用
+        if self.use_checkpoint and x.requires_grad:
+            # Pass scalar args as they don't require grad, but required for shape reconstruction
+            out = checkpoint(scan_multidir, x_norm, B, T, H, W, C, use_reentrant=False)
+        else:
+            out = scan_multidir(x_norm, B, T, H, W, C)
+            
+        x = shortcut + self.drop_path(out)
+        
+        # 3. MLP with Locality
         x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
         
-        # 4. 还原维度 [B, T, C, H, W]
+        # 4. Restore: [B, T, C, H, W]
         return x.reshape(B, T, H, W, C).permute(0, 1, 4, 2, 3).contiguous()

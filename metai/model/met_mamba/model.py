@@ -42,23 +42,16 @@ class Encoder(nn.Module):
         return latent, enc1
 
 class Decoder(nn.Module):
-    """
-    [改进] Decoder
-    在最后两个上采样阶段使用 ResizeConv 替代 ConvSC 中的 PixelShuffle 或 TransposedConv，
-    利用 "双线性插值 + 卷积" 消除棋盘格伪影 (Checkerboard Artifacts)，
-    获得更平滑、自然的雷达回波预测结果。
-    """
     def __init__(self, C_hid, C_out, N_S, spatio_kernel):
         super().__init__()
         samplings = sampling_generator(N_S, reverse=True)
-        
         layers = []
         for i, s in enumerate(samplings):
-            # 策略：前几层保持 ConvSC (计算效率高)，仅在最后两层(分辨率较高时)使用 ResizeConv
+            # Strategy: Use ResizeConv for last 2 layers to reduce artifacts
             if i < len(samplings) - 2:
                 layers.append(ConvSC(C_hid, C_hid, spatio_kernel, upsampling=s))
             else:
-                if s: # 需要上采样
+                if s: 
                     layers.append(ResizeConv(C_hid, C_hid, spatio_kernel))
                 else:
                     layers.append(ConvSC(C_hid, C_hid, spatio_kernel, upsampling=False))
@@ -70,7 +63,6 @@ class Decoder(nn.Module):
         for i in range(0, len(self.dec)-1):
             hid = self.dec[i](hid)
         
-        # Skip Connection fusion (Additive)
         if skip is not None:
             hid = hid + skip
             
@@ -78,49 +70,36 @@ class Decoder(nn.Module):
         return self.readout(Y)
 
 class EvolutionNet(nn.Module):
-    """
-    [最终优化版] EvolutionNet
-    集成特性：
-    1. STMambaBlock: 连续时空建模，支持 Gradient Checkpointing。
-    2. 3D Positional Embedding: 补充 GIS 缺乏的序列索引信息 (T, H, W)。
-    3. Time Prompt (Sparse Opt): 显式时间提示，防止稀疏数据下的懒惰预测。
-    """
     def __init__(self, dim_in, dim_hid, num_layers, drop=0., drop_path=0., 
-                 mamba_kwargs={}, use_checkpoint=True, max_t=64):
+                 mamba_kwargs={}, use_checkpoint=True, max_t=64, input_resolution=(64, 64)):
         super().__init__()
         self.proj_in = nn.Linear(dim_in, dim_hid)
         self.proj_out = nn.Linear(dim_hid, dim_in)
         
-        # [优化1] 3D 绝对位置编码 (Learnable)
-        # 即使有 GIS，PE 仍提供了 Mamba 必须的 "序列索引" 含义。
-        # 分离时间与空间，便于不同分辨率插值。
+        # 3D Absolute Positional Embeddings
         self.pos_embed_t = nn.Parameter(torch.zeros(1, max_t, dim_hid, 1, 1)) 
-        # 假设隐层空间最大 64x64 (256x256 下采样 4倍)
-        self.pos_embed_s = nn.Parameter(torch.zeros(1, 1, dim_hid, 64, 64)) 
         
-        # [优化2] Time Prompt (Learnable)
-        # 针对稀疏数据优化：这是一个随时间变化的偏置，
-        # 强迫模型根据 Time Prompt 意识到"现在是第T帧"，即使输入全0也能保持演变。
+        # Dynamic Spatial PE init
+        H_feat, W_feat = input_resolution
+        self.pos_embed_s = nn.Parameter(torch.zeros(1, 1, dim_hid, H_feat, W_feat)) 
+        
+        # Time Prompt (Optimization for sparse radar data)
         self.time_prompt = nn.Parameter(torch.zeros(1, max_t, dim_hid, 1, 1))
 
-        # 初始化参数
         trunc_normal_(self.pos_embed_t, std=0.02)
         trunc_normal_(self.pos_embed_s, std=0.02)
         trunc_normal_(self.time_prompt, std=0.02)
         
         dpr = [x.item() for x in torch.linspace(1e-2, drop_path, num_layers)]
-        self.layers = nn.ModuleList()
-        
-        for i in range(num_layers):
-            self.layers.append(
-                STMambaBlock(
-                    dim_hid, 
-                    drop=drop, 
-                    drop_path=dpr[i], 
-                    use_checkpoint=use_checkpoint, # 传递 Checkpoint 开关
-                    **mamba_kwargs
-                )
-            )
+        self.layers = nn.ModuleList([
+            STMambaBlock(
+                dim_hid, 
+                drop=drop, 
+                drop_path=dpr[i], 
+                use_checkpoint=use_checkpoint, 
+                **mamba_kwargs
+            ) for i in range(num_layers)
+        ])
 
     def forward(self, x):
         # x: [B, T, C, H, W]
@@ -130,14 +109,12 @@ class EvolutionNet(nn.Module):
         x = self.proj_in(x)
         x = x.permute(0, 1, 4, 2, 3).contiguous() # [B, T, C_hid, H, W]
         
-        # --- 注入位置信息与稀疏优化提示 ---
-        
-        # 1. 动态插值 Time Prompt & Time PE 以匹配当前 T
+        # --- Interpolation Logic ---
+        # 1. Time Prompt & Time PE
         if T <= self.time_prompt.shape[1]:
             t_prompt = self.time_prompt[:, :T, ...]
             t_pos = self.pos_embed_t[:, :T, ...]
         else:
-            # 如果 T 超过预设最大长度，进行线性插值
             t_prompt = F.interpolate(
                 self.time_prompt.squeeze(-1).squeeze(-1).permute(0,2,1), 
                 size=T, mode='linear'
@@ -147,7 +124,7 @@ class EvolutionNet(nn.Module):
                 size=T, mode='linear'
             ).permute(0,2,1).unsqueeze(-1).unsqueeze(-1)
 
-        # 2. 动态插值 Spatial PE
+        # 2. Spatial PE
         if (H, W) != self.pos_embed_s.shape[-2:]:
             s_pos = F.interpolate(
                 self.pos_embed_s, size=(H, W), mode='bilinear', align_corners=False
@@ -155,11 +132,8 @@ class EvolutionNet(nn.Module):
         else:
             s_pos = self.pos_embed_s
 
-        # 3. 叠加 (Add)
-        # 原始特征 + 时间提示(优化稀疏) + 时间位置(序列感) + 空间位置(序列感)
+        # 3. Additive Injection
         x = x + t_prompt + t_pos + s_pos
-        
-        # ----------------------------------
         
         for layer in self.layers:
             x = layer(x)
@@ -184,7 +158,7 @@ class MeteoMamba(nn.Module):
                  mamba_d_state=16, 
                  mamba_d_conv=4, 
                  mamba_expand=2,
-                 use_checkpoint=True, # [新增配置] 默认开启以节省显存
+                 use_checkpoint=True,
                  **kwargs):
         super().__init__()
         
@@ -201,18 +175,26 @@ class MeteoMamba(nn.Module):
         
         self.enc = Encoder(C, hid_S, N_S, spatio_kernel_enc)
         
-        # 核心演变网络: 使用 STMambaBlock + TimePrompt + Checkpoint
+        # Calculate resolution at evolution stage (downsampled N_S/2 times)
+        # Assumes N_S=4 implies 2 downsamples usually, depends on sampling_generator logic
+        # Here assuming 4 layers with [False, True, False, True] -> 4x downsample total
+        ds_factor = 2 ** (N_S // 2) 
+        evo_res = (H // ds_factor, W // ds_factor)
+
         self.evolution = EvolutionNet(
             hid_S, hid_T, N_T, 
             drop=0.0, drop_path=0.1, 
             mamba_kwargs=mamba_kwargs,
-            use_checkpoint=use_checkpoint
+            use_checkpoint=use_checkpoint,
+            input_resolution=evo_res
         )
         
-        # 潜在空间时间投影 (T_in -> T_out)
+        # [CRITICAL FIX] Latent Time Projection
+        # Changed kernel_size to 1 to prevent mixing spatially distant flattened pixels.
+        # Logic: We want to mix T_in -> T_out PER SPATIAL LOCATION.
         self.latent_time_proj = nn.Sequential(
             nn.Conv1d(T_in, self.T_out, kernel_size=1),
-            nn.Conv1d(self.T_out, self.T_out, kernel_size=3, padding=1, groups=1),
+            nn.Conv1d(self.T_out, self.T_out, kernel_size=1), # Was kernel_size=3
             nn.SiLU()
         )
         
@@ -230,29 +212,32 @@ class MeteoMamba(nn.Module):
         # x_raw: [B, T_in, C_in, H, W]
         B, T_in, C_in, H, W = x_raw.shape
         
-        # 1. Encoder: 提取空间特征 -> [B*T_in, C_hid, H_, W_]
+        # 1. Encoder -> [B*T_in, C_hid, H_, W_]
         embed, skip = self.enc(x_raw) 
         _, C_hid, H_, W_ = embed.shape 
         
-        # 2. Evolution: 时空演变 (STMamba) -> [B, T_in, C_hid, H_, W_]
+        # 2. Evolution -> [B, T_in, C_hid, H_, W_]
         z = embed.view(B, T_in, C_hid, H_, W_)
         z = self.evolution(z)
         
-        # 3. Time Projection: 预测未来时间步 -> [B, T_out, C_hid, H_, W_]
-        z = z.reshape(B, T_in, -1) # [B, T_in, C*H*W]
-        z = self.latent_time_proj(z) # [B, T_out, C*H*W]
+        # 3. Time Projection -> [B, T_out, C_hid, H_, W_]
+        # Reshape to [B, T_in, Features] where Features = C*H*W
+        # Conv1d operates on Dim 1 (T_in), so Kernel slides over Features (Dim 2)
+        # Using kernel=1 ensures we independently mix time for each feature (pixel).
+        z = z.reshape(B, T_in, -1) 
+        z = self.latent_time_proj(z) 
         z = z.reshape(B * self.T_out, C_hid, H_, W_)
         
-        # 4. Skip Connection 处理
+        # 4. Skip Connection
         skip = skip.view(B, T_in, C_hid, H, W)
-        skip_out = self.skip_proj(skip) # [B, T_out, C_hid, H, W]
+        skip_out = self.skip_proj(skip) 
         skip_out = skip_out.view(B * self.T_out, C_hid, H, W)
         
-        # 5. Decoder: 还原空间分辨率 (含 ResizeConv) -> [B, T_out, 1, H, W]
+        # 5. Decoder
         Y_diff = self.dec(z, skip_out)
         Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         
-        # 6. Residual Connection: 加上最后一帧观测作为基准
+        # 6. Residual Connection (Prediction = Last Frame + Diff)
         last_frame = x_raw[:, -1:, :self.out_channels, :, :].detach() 
         Y = last_frame + Y_diff
         
