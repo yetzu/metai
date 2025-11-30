@@ -1,24 +1,27 @@
 #!/bin/bash
 
-# MeteoMamba 全流程脚本 (Optimized for A800 80GB)
-# 包含: Train (MeteoMamba) -> Test (MeteoMamba Visualization)
+# MeteoMamba Workflow Script
+# Modes: 
+#   1. Train (MeteoMamba Training)
+#   2. Test (Metrics & Evaluation)
+#   3. Infer (Generate Submission Files 301x301)
 
 export PYTHONPATH=$PYTHONPATH:$(pwd)
-# A800 显存足够，通常不需要过于激进的碎片整理
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
 export NCCL_P2P_DISABLE=0
 export NCCL_IB_DISABLE=0
 export NCCL_DEBUG=WARN
 
 if [ $# -eq 0 ]; then
-    echo "用法: bash run.scwds.mamba.sh [MODE]"
+    echo "Usage: bash run.scwds.mamba.sh [MODE]"
+    echo "  MODE: train | test | infer"
     exit 1
 fi
 
 MODE=$1
 
-# [注意] 如果是单卡 A800，请改为 DEVICES="[0]"
-# 如果是多卡，保持 "[0,1,2,3]"，Batch Size 会自动乘以卡数 (Global Batch Size)
+# Device Configuration
+# Adjust DEVICES based on your available GPUs (e.g., "[0]" for single GPU)
 DEVICES="[1,2,3]" 
 DATA_PATH="data/samples.jsonl"
 SAVE_DIR="./output" 
@@ -27,11 +30,10 @@ BATCH_SIZE=4
 case $MODE in
     "train")
         echo "--------------------------------------------------------"
-        echo "🚀 [AI] 开始训练 Met Mamba ..."
+        echo " [MetAI] Starting Training (MeteoMamba) ..."
         echo "--------------------------------------------------------"
 
         python run/train_scwds_mamba.py fit \
-            --ckpt_path /home/yyj/code/output/lightning_logs/version_0/checkpoints/last.ckpt \
             --seed_everything 42 \
             --trainer.default_root_dir $SAVE_DIR \
             --trainer.accelerator cuda \
@@ -67,8 +69,8 @@ case $MODE in
             --model.warmup_epoch 20 \
             --model.lr 1e-3 \
             --model.min_lr 1e-6 \
-            --model.weight_focal 2.0 \
-            --model.weight_grad 15.0 \
+            --model.weight_focal 1 \
+            --model.weight_msssim 1 \
             --model.weight_corr 1.0 \
             --model.weight_dice 2.0 \
             --model.focal_alpha 2.0 \
@@ -81,15 +83,15 @@ case $MODE in
         
     "test")
         echo "----------------------------------------"
-        echo "🧪 开始测试 Met Mamba 基座模型..."
+        echo " [MetAI] Starting Test (Metrics & Evaluation)..."
         echo "----------------------------------------"
         
-        # 自动寻找最佳 Checkpoint
+        # Automatically find best Checkpoint
         CKPT_PATH=$(find $SAVE_DIR -name "*val_score*.ckpt" | sort -V | tail -n 1)
         if [ -z "$CKPT_PATH" ]; then CKPT_PATH=$(find $SAVE_DIR -name "last.ckpt" | head -n 1); fi
         
         if [ -z "$CKPT_PATH" ]; then
-            echo "❌ 错误: 未找到 Checkpoint"
+            echo " Error: Checkpoint not found"
             exit 1
         fi
         
@@ -106,11 +108,30 @@ case $MODE in
             --accelerator cuda:0 \
             
         ;;
+
+    "infer")
+        echo "----------------------------------------"
+        echo " [MetAI] Starting Inference (Submission Generation)..."
+        echo "----------------------------------------"
+        
+        # Automatically use best/latest model in SAVE_DIR
+        # Output saved to ./submit/output
+        
+        python run/infer_scwds_mamba.py \
+            --ckpt_dir "$SAVE_DIR" \
+            --data_path "data/samples.testset.jsonl" \
+            --save_dir "./submit/output" \
+            --vis_output "./submit/vis_infer" \
+            --resize_shape 256 256 \
+            --accelerator cuda:0 \
+            --vis
+        ;;
         
     *)
-        echo "错误: 不支持的操作模式 '$MODE'"
+        echo "Error: Unsupported mode '$MODE'"
+        echo "Supported modes: train, test, infer"
         exit 1
         ;;
 esac
 
-echo "✅ 操作完成！"
+echo " Operation Completed."

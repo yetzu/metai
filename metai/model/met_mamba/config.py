@@ -44,15 +44,15 @@ class ModelConfig(BaseModel):
     use_curriculum_learning: bool = True 
     
     # --- 损失权重 (Unified Naming) ---
-    weight_focal: float = 1.0   # FocalLoss
-    weight_grad: float = 10.0   # GradLoss
-    weight_corr: float = 0.5    # CorrLoss
-    weight_dice: float = 1.0    # DiceLoss
+    weight_focal: float = 1.0
+    weight_msssim: float = 1.0
+    weight_corr: float = 0.5
+    weight_dice: float = 1.0
     
     # --- 损失细节参数 ---
     focal_alpha: float = 2.0
     focal_gamma: float = 1.0
-    intensity_weights: Tuple[float, ...] = (0.1, 1.0, 1.2, 2.5, 3.5, 5.0)
+    intensity_weights: Tuple[float, ...] = (0.1, 1.0, 2.0, 5.0, 10.0, 20.0)
     false_alarm_penalty: float = 5.0
     corr_smooth_eps: float = 1e-4
     

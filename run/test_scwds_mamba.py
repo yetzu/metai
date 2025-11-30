@@ -188,12 +188,14 @@ def process_batch(scorer, obs_tensor, true_tensor, pred_tensor, out_path, batch_
 
     # 2. 打印单样本报告
     print(f"\n{'='*25} Sample {batch_idx:03d} Report {'='*25}")
-    print(f"[METRIC] Total Weighted Score: {final_score:.6f}")
     
     print_metrics_table(
         ts_levels, mae_levels, r_time, score_time, 
         ts_time_matrix, mae_time_matrix, level_weights_np
     )
+
+    print(f"[METRIC] Total Weighted Score: {final_score:.6f}")
+    
 
     # 3. 准备可视化数据 (转换为物理值 mm)
     def to_numpy_ch_mm(x, ch=0):
@@ -320,8 +322,6 @@ def main():
         avg_metrics = tracker.compute()
         
         print(f"\n\n{'='*30} FINAL TEST SUMMARY ({tracker.count} samples) {'='*30}")
-        print(f"[AVERAGE TOTAL SCORE]: {avg_metrics['total_score'].item():.6f}")
-        
         # 提取平均指标并打印
         ts_levels_avg = avg_metrics['ts_levels'].cpu().numpy()
         mae_levels_avg = avg_metrics['mae_levels'].cpu().numpy()
@@ -335,6 +335,8 @@ def main():
             ts_time_avg, mae_time_avg, level_weights_np,
             prefix="[AVG] "
         )
+
+        print(f"[AVERAGE TOTAL SCORE]: {avg_metrics['total_score'].item():.6f}")
         
         print("="*88)
         print(f"Log saved to: {os.path.join(out_dir, 'test_report.log')}")
