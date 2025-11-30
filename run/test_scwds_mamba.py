@@ -215,7 +215,16 @@ def main():
     ckpt_info = get_checkpoint_info(args.ckpt_path)
     epoch = ckpt_info.get('epoch', 0)
     
-    out_dir = os.path.join(args.save_dir, f'vis_{epoch:02d}')
+    # [修改] 自动推导输出目录：使其位于 version_XX 文件夹下
+    # 逻辑：获取 ckpt 的绝对路径，如果是 .../version_X/checkpoints/file.ckpt，则输出到 .../version_X/vis_00
+    ckpt_dir_abs = os.path.dirname(os.path.abspath(args.ckpt_path))
+    if os.path.basename(ckpt_dir_abs) == 'checkpoints':
+        version_dir = os.path.dirname(ckpt_dir_abs)
+    else:
+        version_dir = ckpt_dir_abs
+    
+    out_dir = os.path.join(version_dir, f'vis_{epoch:02d}')
+    
     os.makedirs(out_dir, exist_ok=True)
     set_logger(os.path.join(out_dir, 'log.txt'))
     

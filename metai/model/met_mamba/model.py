@@ -2,9 +2,11 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from timm.layers.weight_init import trunc_normal_
 from .modules import (
     ConvSC, 
-    ResizeConv,
+    ResizeConv, 
     STMambaBlock, 
     TimeAlignBlock
 )
@@ -77,31 +79,87 @@ class Decoder(nn.Module):
 
 class EvolutionNet(nn.Module):
     """
-    [改进] Evolution Network
-    使用连续时空 STMambaBlock 替代原有的交替堆叠 (Spatial -> Temporal)。
-    现在每一层都能同时进行时空状态的连续建模。
+    [最终优化版] EvolutionNet
+    集成特性：
+    1. STMambaBlock: 连续时空建模，支持 Gradient Checkpointing。
+    2. 3D Positional Embedding: 补充 GIS 缺乏的序列索引信息 (T, H, W)。
+    3. Time Prompt (Sparse Opt): 显式时间提示，防止稀疏数据下的懒惰预测。
     """
-    def __init__(self, dim_in, dim_hid, num_layers, drop=0., drop_path=0., mamba_kwargs={}):
+    def __init__(self, dim_in, dim_hid, num_layers, drop=0., drop_path=0., 
+                 mamba_kwargs={}, use_checkpoint=True, max_t=64):
         super().__init__()
         self.proj_in = nn.Linear(dim_in, dim_hid)
         self.proj_out = nn.Linear(dim_hid, dim_in)
+        
+        # [优化1] 3D 绝对位置编码 (Learnable)
+        # 即使有 GIS，PE 仍提供了 Mamba 必须的 "序列索引" 含义。
+        # 分离时间与空间，便于不同分辨率插值。
+        self.pos_embed_t = nn.Parameter(torch.zeros(1, max_t, dim_hid, 1, 1)) 
+        # 假设隐层空间最大 64x64 (256x256 下采样 4倍)
+        self.pos_embed_s = nn.Parameter(torch.zeros(1, 1, dim_hid, 64, 64)) 
+        
+        # [优化2] Time Prompt (Learnable)
+        # 针对稀疏数据优化：这是一个随时间变化的偏置，
+        # 强迫模型根据 Time Prompt 意识到"现在是第T帧"，即使输入全0也能保持演变。
+        self.time_prompt = nn.Parameter(torch.zeros(1, max_t, dim_hid, 1, 1))
+
+        # 初始化参数
+        trunc_normal_(self.pos_embed_t, std=0.02)
+        trunc_normal_(self.pos_embed_s, std=0.02)
+        trunc_normal_(self.time_prompt, std=0.02)
         
         dpr = [x.item() for x in torch.linspace(1e-2, drop_path, num_layers)]
         self.layers = nn.ModuleList()
         
         for i in range(num_layers):
-            # 全部替换为 STMambaBlock
             self.layers.append(
-                STMambaBlock(dim_hid, drop=drop, drop_path=dpr[i], **mamba_kwargs)
+                STMambaBlock(
+                    dim_hid, 
+                    drop=drop, 
+                    drop_path=dpr[i], 
+                    use_checkpoint=use_checkpoint, # 传递 Checkpoint 开关
+                    **mamba_kwargs
+                )
             )
 
     def forward(self, x):
         # x: [B, T, C, H, W]
-        # 变换为 [B, T, H, W, C] 以适应 Linear 和 LayerNorm
-        x = x.permute(0, 1, 3, 4, 2).contiguous()
+        B, T, C, H, W = x.shape
+        
+        x = x.permute(0, 1, 3, 4, 2).contiguous() # [B, T, H, W, C]
         x = self.proj_in(x)
-        # 变换回 [B, T, C, H, W] 传递给 Block (STMambaBlock 内部会将 T 展开为序列)
-        x = x.permute(0, 1, 4, 2, 3).contiguous()
+        x = x.permute(0, 1, 4, 2, 3).contiguous() # [B, T, C_hid, H, W]
+        
+        # --- 注入位置信息与稀疏优化提示 ---
+        
+        # 1. 动态插值 Time Prompt & Time PE 以匹配当前 T
+        if T <= self.time_prompt.shape[1]:
+            t_prompt = self.time_prompt[:, :T, ...]
+            t_pos = self.pos_embed_t[:, :T, ...]
+        else:
+            # 如果 T 超过预设最大长度，进行线性插值
+            t_prompt = F.interpolate(
+                self.time_prompt.squeeze(-1).squeeze(-1).permute(0,2,1), 
+                size=T, mode='linear'
+            ).permute(0,2,1).unsqueeze(-1).unsqueeze(-1)
+            t_pos = F.interpolate(
+                self.pos_embed_t.squeeze(-1).squeeze(-1).permute(0,2,1), 
+                size=T, mode='linear'
+            ).permute(0,2,1).unsqueeze(-1).unsqueeze(-1)
+
+        # 2. 动态插值 Spatial PE
+        if (H, W) != self.pos_embed_s.shape[-2:]:
+            s_pos = F.interpolate(
+                self.pos_embed_s, size=(H, W), mode='bilinear', align_corners=False
+            )
+        else:
+            s_pos = self.pos_embed_s
+
+        # 3. 叠加 (Add)
+        # 原始特征 + 时间提示(优化稀疏) + 时间位置(序列感) + 空间位置(序列感)
+        x = x + t_prompt + t_pos + s_pos
+        
+        # ----------------------------------
         
         for layer in self.layers:
             x = layer(x)
@@ -126,6 +184,7 @@ class MeteoMamba(nn.Module):
                  mamba_d_state=16, 
                  mamba_d_conv=4, 
                  mamba_expand=2,
+                 use_checkpoint=True, # [新增配置] 默认开启以节省显存
                  **kwargs):
         super().__init__()
         
@@ -142,11 +201,12 @@ class MeteoMamba(nn.Module):
         
         self.enc = Encoder(C, hid_S, N_S, spatio_kernel_enc)
         
-        # 核心演变网络: 使用 STMambaBlock 堆叠
+        # 核心演变网络: 使用 STMambaBlock + TimePrompt + Checkpoint
         self.evolution = EvolutionNet(
             hid_S, hid_T, N_T, 
             drop=0.0, drop_path=0.1, 
-            mamba_kwargs=mamba_kwargs
+            mamba_kwargs=mamba_kwargs,
+            use_checkpoint=use_checkpoint
         )
         
         # 潜在空间时间投影 (T_in -> T_out)

@@ -3,56 +3,58 @@ from typing import Tuple
 
 class ModelConfig(BaseModel):
     """
-    ModelConfig 模型配置
+    MeteoMamba 模型配置类
     """
-    # --- 路径与基础 ---
+    # 基础配置
     data_path: str = "data/samples.jsonl"
     save_dir: str = "./output"
     
-    # --- 形状参数 ---
-    # Input Shape: (C, H, W)
+    # 形状参数
     in_shape: Tuple[int, int, int] = (31, 256, 256) 
     obs_seq_len: int = 10 
     pred_seq_len: int = 20 
     
-    # --- 模型参数 ---
-    hid_S: int = 128   
-    hid_T: int = 512  
+    # 模型架构 (STMamba)
+    hid_S: int = 128
+    hid_T: int = 512
     N_S: int = 4
     N_T: int = 8 
-
-    # --- Mamba 核心参数 ---
-    mamba_d_state: int = 16  
+    mamba_d_state: int = 16
     mamba_d_conv: int = 4
     mamba_expand: int = 2
+    use_checkpoint: bool = True # 显存优化
     
-    # --- 训练参数 ---
+    # 训练参数
     batch_size: int = 4 
     accumulate_grad_batches: int = 1 
     max_epochs: int = 100
     
-    # --- 优化器与调度器 ---
+    # 优化器
     opt: str = "adamw"
     lr: float = 1e-3 
     min_lr: float = 1e-5
     warmup_lr: float = 1e-5
-    warmup_epoch: int = 10 
+    warmup_epoch: int = 15
     weight_decay: float = 0.05 
     momentum: float = 0.9
-    filter_bias_and_bn: bool = True # # [必须添加] 开启后可以保护 Bias 和 LayerNorm 不受不必要的衰减影响
-    
+    filter_bias_and_bn: bool = True
     sched: str = "cosine"
     decay_epoch: int = 30 
     decay_rate: float = 0.1
-    
-    # --- 策略 ---
     use_curriculum_learning: bool = False 
     
-    # --- 损失函数权重 ---
-    loss_weight_l1: float = 1.0    # MAE 基准权重
-    loss_weight_gdl: float = 10.0  # 放大以匹配 MAE 量级
-    loss_weight_corr: float = 0.5  # 相关性损失权重
-    loss_weight_dice: float = 1.0  # TS/Dice 损失权重
+    # --- 损失权重 (Unified Naming) ---
+    weight_focal: float = 1.0   # FocalLoss
+    weight_grad: float = 10.0   # GradLoss
+    weight_corr: float = 0.5    # CorrLoss
+    weight_dice: float = 1.0    # DiceLoss
+    
+    # --- 损失细节参数 ---
+    focal_alpha: float = 2.0
+    focal_gamma: float = 1.0
+    intensity_weights: Tuple[float, ...] = (0.1, 1.0, 1.2, 2.5, 3.5, 5.0)
+    false_alarm_penalty: float = 5.0
+    corr_smooth_eps: float = 1e-4
     
     model_config = ConfigDict(protected_namespaces=())
     

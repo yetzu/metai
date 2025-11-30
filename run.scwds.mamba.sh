@@ -21,14 +21,19 @@ MODE=$1
 # 如果是多卡，保持 "[0,1,2,3]"，Batch Size 会自动乘以卡数 (Global Batch Size)
 DEVICES="[1,2,3]" 
 DATA_PATH="data/samples.jsonl"
-SAVE_DIR="./output" # 修改输出目录以免覆盖旧实验
+SAVE_DIR="./output" 
 BATCH_SIZE=4
-# --ckpt_path /home/yyj/code/output/lightning_logs/version_6/checkpoints/last.ckpt \
+
 case $MODE in
     "train")
         echo "--------------------------------------------------------"
-        echo "🚀 [A800] 开始训练 Met Mamba 基座模型 (BF16 Mixed)..."
+        echo "🚀 [A800] 开始训练 Met Mamba (STMamba + ResizeConv)..."
         echo "--------------------------------------------------------"
+        # 自动查找最近的 checkpoint 用于断点续训 (如果存在)
+        # LAST_CKPT=$(find $SAVE_DIR -name "last.ckpt" | head -n 1)
+        # CKPT_ARG=""
+        # if [ ! -z "$LAST_CKPT" ]; then CKPT_ARG="--ckpt_path $LAST_CKPT"; fi
+
         python run/train_scwds_mamba.py fit \
             --seed_everything 42 \
             --trainer.default_root_dir $SAVE_DIR \
@@ -36,9 +41,9 @@ case $MODE in
             --trainer.devices $DEVICES \
             --trainer.strategy ddp \
             --trainer.precision bf16-mixed \
-            --trainer.max_epochs 50 \
+            --trainer.max_epochs 100 \
             --trainer.log_every_n_steps 50 \
-            --trainer.accumulate_grad_batches 4 \
+            --trainer.accumulate_grad_batches 1 \
             --trainer.gradient_clip_val 1.0 \
             --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
             --trainer.callbacks.monitor "val_score" \
@@ -49,22 +54,30 @@ case $MODE in
             --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
-            --trainer.callbacks.patience 30 \
+            --trainer.callbacks.patience 20 \
             --model.batch_size $BATCH_SIZE \
             --model.in_shape "[31, 256, 256]" \
             --model.obs_seq_len 10 \
             --model.pred_seq_len 20 \
-            --model.hid_S 64 \
-            --model.hid_T 256 \
+            --model.hid_S 128 \
+            --model.hid_T 512 \
             --model.N_S 4 \
-            --model.N_T 6 \
+            --model.N_T 8 \
             --model.mamba_d_state 16 \
             --model.mamba_d_conv 4 \
             --model.mamba_expand 2 \
-            --model.use_curriculum_learning false \
+            --model.use_checkpoint true \
+            --model.warmup_epoch 15 \
+            --model.weight_focal 1.0 \
+            --model.weight_grad 10.0 \
+            --model.weight_corr 0.5 \
+            --model.weight_dice 1.0 \
+            --model.focal_alpha 2.0 \
+            --model.focal_gamma 1.0 \
             --data.data_path $DATA_PATH \
             --data.batch_size $BATCH_SIZE \
             --data.num_workers 8 \
+            # $CKPT_ARG
         ;;
         
     "test")
@@ -72,8 +85,8 @@ case $MODE in
         echo "🧪 开始测试 Met Mamba 基座模型..."
         echo "----------------------------------------"
         
-        # 自动寻找 Checkpoint
-        CKPT_PATH=$(find $SAVE_DIR -name "*.ckpt" | sort -V | tail -n 1)
+        # 自动寻找最佳 Checkpoint
+        CKPT_PATH=$(find $SAVE_DIR -name "*val_score*.ckpt" | sort -V | tail -n 1)
         if [ -z "$CKPT_PATH" ]; then CKPT_PATH=$(find $SAVE_DIR -name "last.ckpt" | head -n 1); fi
         
         if [ -z "$CKPT_PATH" ]; then
@@ -83,7 +96,6 @@ case $MODE in
         
         echo "Using Checkpoint: $CKPT_PATH"
         
-        # [Update] 这里的参数已更新为匹配 test_scwds_mamba.py 的新接口
         python run/test_scwds_mamba.py \
             --ckpt_path "$CKPT_PATH" \
             --save_dir "$SAVE_DIR" \

@@ -1,24 +1,18 @@
 import lightning as l
 import torch
-from typing import Optional, Union, Any
+from typing import Optional, Union, Any, Dict
 
-# 引入项目配置与工具
-from metai.utils import MetLabel
-from metai.model.core import get_optim_scheduler, timm_schedulers
+from metai.model.core import get_optim_scheduler
 from .model import MeteoMamba
 from .loss import HybridLoss
 from .metrices import MetScore
 from .config import ModelConfig
 
 class MeteoMambaModule(l.LightningModule):
-    def __init__(
-        self, 
-        config: Optional[Union[ModelConfig, dict]] = None,
-        **kwargs 
-    ):
+    def __init__(self, config: Optional[Union[ModelConfig, dict]] = None, **kwargs):
         super().__init__()
         
-        # 1. 配置对象初始化
+        # 配置初始化
         if config is None:
             self.config = ModelConfig(**kwargs)
         elif isinstance(config, dict):
@@ -30,42 +24,44 @@ class MeteoMambaModule(l.LightningModule):
                 if hasattr(self.config, k):
                     setattr(self.config, k, v)
 
-        # 2. 保存超参数 [关键修改]
-        # 移除与 DataModule 冲突的参数 (batch_size, data_path)
-        # 这样 Lightning 就不会因为参数值不一致而报错
+        # 保存超参数
         hparams = self.config.to_dict()
-        hparams.pop('batch_size', None)
-        hparams.pop('data_path', None)
+        for key in ['batch_size', 'data_path']:
+            hparams.pop(key, None)
         self.save_hyperparameters(hparams)
         
-        # 3. 初始化模型
+        # 初始化模型
         self.model = MeteoMamba(
-            in_shape=self.config.in_shape,      # (C, H, W)
-            in_seq_len=self.config.obs_seq_len, # T_in
-            out_seq_len=self.config.pred_seq_len, # T_out
-            out_channels=1,
+            in_shape=self.config.in_shape,
+            in_seq_len=self.config.obs_seq_len,
+            out_seq_len=self.config.pred_seq_len,
             hid_S=self.config.hid_S,
             hid_T=self.config.hid_T,
             N_S=self.config.N_S,
             N_T=self.config.N_T,
             mamba_d_state=self.config.mamba_d_state,
             mamba_d_conv=self.config.mamba_d_conv,
-            mamba_expand=self.config.mamba_expand
+            mamba_expand=self.config.mamba_expand,
+            use_checkpoint=self.config.use_checkpoint
         )
         
-        # 4. 初始化 Loss
+        # 初始化损失 (HybridLoss)
         self.criterion = HybridLoss(
-            l1_weight=self.config.loss_weight_l1, 
-            gdl_weight=self.config.loss_weight_gdl,
-            corr_weight=self.config.loss_weight_corr,
-            dice_weight=self.config.loss_weight_dice
+            weight_focal=self.config.weight_focal, 
+            weight_grad=self.config.weight_grad,
+            weight_corr=self.config.weight_corr,
+            weight_dice=self.config.weight_dice,
+            intensity_weights=self.config.intensity_weights,
+            focal_alpha=self.config.focal_alpha,
+            focal_gamma=self.config.focal_gamma,
+            false_alarm_penalty=self.config.false_alarm_penalty,
+            corr_smooth_eps=self.config.corr_smooth_eps
         )
         
-        # 5. 辅助属性
-        self.resize_shape = (self.config.in_shape[1], self.config.in_shape[2])
+        # 评估指标
         self.valid_scorer = MetScore()
 
-    def configure_optimizers(self) -> Any:
+    def configure_optimizers(self) -> Dict[str, Any]:
         optimizer, scheduler, by_epoch = get_optim_scheduler(
             self.config, self.config.max_epochs, self.model
         )
@@ -77,45 +73,31 @@ class MeteoMambaModule(l.LightningModule):
             }
         }
 
-    def lr_scheduler_step(self, scheduler, metric):
-        # 兼容 timm scheduler 和标准 PyTorch scheduler
-        if any(isinstance(scheduler, sch) for sch in timm_schedulers):
-            scheduler.step(epoch=self.current_epoch, metric=metric) # type: ignore
-        else:
-            if metric is None:
-                scheduler.step() # type: ignore
-            else:
-                try:
-                    scheduler.step(metrics=metric) # type: ignore
-                except TypeError:
-                    scheduler.step() # type: ignore
-
     def training_step(self, batch, batch_idx):
         _, x, y, _, t_mask = batch
-        
         if t_mask.dtype != torch.float32: t_mask = t_mask.float()
         
-        pred_raw = self.model(x)
-        pred = torch.clamp(pred_raw, 0.0, 1.0)
+        pred = torch.clamp(self.model(x), 0.0, 1.0)
         
         loss, loss_dict = self.criterion(pred, y, mask=t_mask)
         
         bs = x.size(0)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
-        self.log('loss_l1', loss_dict.get('l1', 0), on_step=False, on_epoch=True, prog_bar=False, batch_size=bs, sync_dist=True)
-        self.log('loss_gdl', loss_dict.get('gdl', 0), on_step=False, on_epoch=True, prog_bar=False, batch_size=bs, sync_dist=True)
+        
+        # 记录分项损失 (loss_focal, loss_grad, loss_corr, loss_dice)
+        for k, v in loss_dict.items():
+            if k != 'total':
+                self.log(f'loss_{k}', v, on_step=False, on_epoch=True, batch_size=bs, sync_dist=True)
+                
         return loss
 
     def validation_step(self, batch, batch_idx):
         _, x, y, _, t_mask = batch
-        
         if t_mask.dtype != torch.float32: t_mask = t_mask.float()
         
-        pred_raw = self.model(x)
-        pred = torch.clamp(pred_raw, 0.0, 1.0)
+        pred = torch.clamp(self.model(x), 0.0, 1.0)
         
         loss, _ = self.criterion(pred, y, mask=t_mask)
-        
         metric_results = self.valid_scorer(pred, y, mask=t_mask)
         val_score = metric_results['total_score']
 
@@ -125,8 +107,7 @@ class MeteoMambaModule(l.LightningModule):
 
     def test_step(self, batch, batch_idx):
         _, x, y, _, t_mask = batch
-        pred_raw = self.model(x)
-        pred = torch.clamp(pred_raw, 0.0, 1.0)
+        pred = torch.clamp(self.model(x), 0.0, 1.0)
         return {'inputs': x, 'trues': y, 'preds': pred}
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):

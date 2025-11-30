@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from timm.layers.drop import DropPath
 from timm.layers.weight_init import trunc_normal_
 
@@ -18,8 +19,22 @@ except ImportError:
             raise ImportError("Please install 'mamba_ssm'")
 
 # ==========================================
-# 1. 基础卷积与上采样组件
+# 0. 基础组件 (RMSNorm & Conv)
 # ==========================================
+
+class RMSNorm(nn.Module):
+    """
+    [新增] Root Mean Square Layer Normalization
+    相比 LayerNorm 去除了均值中心化，数值稳定性更好，适合混合精度训练。
+    """
+    def __init__(self, d_model: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(d_model))
+
+    def forward(self, x):
+        output = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return output * self.weight
 
 class BasicConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=0, 
@@ -27,8 +42,8 @@ class BasicConv2d(nn.Module):
         super().__init__()
         self.act_norm = act_norm
         
-        # 传统的上采样方式 (PixelShuffle)，保留用于 ConvSC 的兼容性
         if upsampling:
+            # 传统的上采样方式 (PixelShuffle)，保留用于 ConvSC 的兼容性
             self.conv = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels*4, kernel_size, stride, padding, dilation),
                 nn.PixelShuffle(2)
@@ -69,8 +84,8 @@ class ResizeConv(nn.Module):
     """
     [新增] Resize-Convolution 上采样模块
     
-    使用 "双线性插值 + 卷积" 替代 PixelShuffle 或转置卷积。
-    优势：能有效消除棋盘格伪影 (Checkerboard Artifacts)，产生更平滑的气象场预测。
+    使用 "双线性插值 + 卷积" 替代 PixelShuffle。
+    优势：能有效消除稀疏降水场预测中的棋盘格伪影 (Checkerboard Artifacts)。
     """
     def __init__(self, in_channels, out_channels, kernel_size=3, act_norm=True):
         super().__init__()
@@ -192,19 +207,25 @@ class STMambaBlock(nn.Module):
     特性：
     1. 连续性：隐状态 (Hidden State) 可以在帧与帧之间传递。
     2. 双向性：采用正向+反向扫描，增强历史与未来信息的交互。
-    3. 局部性：配合 LocalityEnhancedMLP 保持对空间纹理的感知。
+    3. 显存优化：支持 gradient checkpointing，防止长序列显存爆炸。
+    4. 稳定性：使用 RMSNorm。
     """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, 
-                 d_state=16, d_conv=4, expand=2):
+                 d_state=16, d_conv=4, expand=2, use_checkpoint=False):
         super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
+        self.use_checkpoint = use_checkpoint
+        
+        # [修改] 使用 RMSNorm
+        self.norm1 = RMSNorm(dim)
         
         # Mamba 核心配置
         mamba_cfg = dict(d_model=dim, d_state=d_state, d_conv=d_conv, expand=expand)
         self.scan = Mamba(**mamba_cfg)
         
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm2 = nn.LayerNorm(dim)
+        
+        # [修改] 使用 RMSNorm
+        self.norm2 = RMSNorm(dim)
         
         # MLP 部分
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -216,9 +237,9 @@ class STMambaBlock(nn.Module):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.LayerNorm) or isinstance(m, RMSNorm):
+            if hasattr(m, 'bias') and m.bias is not None: nn.init.constant_(m.bias, 0)
+            if hasattr(m, 'weight') and m.weight is not None: nn.init.constant_(m.weight, 1.0)
 
     def forward(self, x_in):
         # x_in: [B, T, C, H, W]
@@ -229,19 +250,27 @@ class STMambaBlock(nn.Module):
         # 此时序列的物理意义是：第1帧全部像素 -> 第2帧全部像素 -> ... -> 第T帧
         x = x_in.permute(0, 1, 3, 4, 2).contiguous().reshape(B, L, C)
         
-        shortcut = x
-        x = self.norm1(x)
-        
-        # 2. 时空连续 Mamba 扫描
-        # Forward Scan: 捕捉过去 -> 未来的演变
-        # Backward Scan: 利用未来信息修正 (对于 Seq2Seq 生成任务很有帮助)
-        out = self.scan(x) + self.scan(x.flip([1])).flip([1])
-        
-        x = shortcut + self.drop_path(out)
+        # 2. 连续 Mamba 扫描 (支持 Checkpoint)
+        if self.use_checkpoint and x.requires_grad:
+            # 定义闭包用于 checkpoint
+            def scan_forward(z):
+                return self.scan(z) + self.scan(z.flip([1])).flip([1])
+            
+            shortcut = x
+            x_norm = self.norm1(x)
+            # 使用 checkpoint 包裹高显存操作
+            out = checkpoint(scan_forward, x_norm, use_reentrant=False)
+            x = shortcut + self.drop_path(out)
+        else:
+            shortcut = x
+            x = self.norm1(x)
+            out = self.scan(x) + self.scan(x.flip([1])).flip([1])
+            x = shortcut + self.drop_path(out)
         
         # 3. 局部增强 MLP
         # LocalityEnhancedMLP 内部会将长序列 Reshape 为 (B*T, C, H, W) 
         # 进行 DW-Conv，从而提取每帧内部的空间纹理特征
+        # 这里需要传入 H, W 供 MLP 内部 reshape 使用
         x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
         
         # 4. 还原维度 [B, T, C, H, W]
