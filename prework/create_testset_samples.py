@@ -8,39 +8,33 @@ from datetime import datetime, timedelta
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from metai.utils import MLOGE, MLOGI, get_config
+from metai.utils import MLOGE, MLOGI, get_config, MetLabel
 from metai.dataset import MetCase
 from metai.utils import scan_directory
 
 def save_samples(samples_data, output_file="data/samples.testset.jsonl"):
     """保存样本数据到JSONL文件"""
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    # 使用 'a' 模式追加写入
     with open(output_file, 'a', encoding='utf-8') as f:
         for sample in samples_data:
             json.dump(sample, f, ensure_ascii=False)
             f.write('\n')
 
-def to_timestr_list(filenames: list[str]):
-    """从标签文件名中提取时间戳"""
-    timestr_list = []
-    for filename in sorted(filenames):
-        name_without_ext = filename.replace('.npy', '')
-        parts = name_without_ext.split('_')
-        # 文件名示例: CP_Label_RA_Z9559_20180704-1213.npy
-        if len(parts) >= 4:
-            date_time = parts[-1]
-            timestr_list.append(date_time)
-    return timestr_list
+def extract_timestamp_from_label(filename: str):
+    """
+    从Label文件名中提取时间戳
+    文件名示例: CP_Label_RA_Z9559_20180704-1213.npy
+    分割后 parts[-1] 为时间戳
+    """
+    name_without_ext = filename.replace('.npy', '')
+    parts = name_without_ext.split('_')
+    if len(parts) >= 4:
+        return parts[-1]
+    return None
 
 def generate_future_timestamps(last_timestamp_str, fmt, count=20, interval_minutes=6):
     """
-    [新增] 根据最后一个观测时间，推算未来的时间戳
-    Args:
-        last_timestamp_str: 最后一个观测时间字符串
-        fmt: 时间格式 (从 config 载入)
-        count: 推算步数 (默认20步)
-        interval_minutes: 时间间隔 (默认6分钟)
+    根据最后一个观测时间，推算未来的时间戳
     """
     try:
         last_time = datetime.strptime(last_timestamp_str, fmt)
@@ -50,7 +44,7 @@ def generate_future_timestamps(last_timestamp_str, fmt, count=20, interval_minut
     
     future_timestamps = []
     for i in range(count):
-        # 每次递增 6 分钟 (或指定间隔)
+        # 每次递增 6 分钟
         future_time = last_time + timedelta(minutes=interval_minutes * (i + 1))
         future_timestamps.append(future_time.strftime(fmt))
     return future_timestamps
@@ -62,16 +56,14 @@ def main():
 
     # 1. 获取全局配置
     config = get_config()
-    
-    # 2. 从配置中载入日期格式
-    # metai/config.yaml 中配置了 file_date_format: "%Y%m%d-%H%M"
     date_fmt = config.file_date_format 
     
-    # 扫描测试集目录
+    # 2. 扫描测试集目录
     root_path = os.path.join(config.root_path, "CP", "TestSet")
+    # 假设 scan_directory 返回 case_id 列表
     case_ids = scan_directory(root_path, 2, return_full_path=False)
     
-    # 每次运行前清理旧文件，防止重复追加
+    # 清理旧文件
     output_file = "data/samples.testset.jsonl"
     if os.path.exists(output_file):
         os.remove(output_file)
@@ -80,53 +72,62 @@ def main():
     total_cnt = right_cnt = sample_cnt = 0
 
     for case_id in case_ids[:]:
-        # 创建 Case 对象
+        # 创建 Case 对象 (is_train=False 表示测试集模式)
         case = MetCase.create(case_id, config, is_train=False, test_set="TestSet")
         
-        # 获取基础样本（过去10帧）
-        # to_infer_sample 内部加载文件列表，默认返回最后 sample_length 个文件
-        seqs = case.to_infer_sample(sample_length=10)
+        # [核心修改 1] 获取所有 RA 标签文件
+        # MetCase._load_label_files 默认按文件名排序返回
+        all_label_files = case._load_label_files(label_var=MetLabel.RA, return_full_path=False)
         
-        if seqs:
-            case_samples = []
-            for idx, seq_files in enumerate(seqs):
-                # A. 提取过去 10 帧的时间戳
-                past_timestamps = to_timestr_list(seq_files)
-                
-                if not past_timestamps:
-                    continue
+        # [核心修改 2] 校验文件数量，取最后 10 帧
+        if len(all_label_files) < 10:
+            MLOGE(f"Case {case_id}: 标签文件不足 10 个 (实际: {len(all_label_files)})")
+            continue
+            
+        input_files = all_label_files[-10:]
+        
+        # 提取过去 10 帧的时间戳
+        past_timestamps = []
+        for f in input_files:
+            ts = extract_timestamp_from_label(f)
+            if ts:
+                past_timestamps.append(ts)
+        
+        if len(past_timestamps) != 10:
+            MLOGE(f"Case {case_id}: 时间戳解析错误，数量不匹配")
+            continue
 
-                # B. 推算未来 20 帧的时间戳 (使用 config 中的 fmt)
-                last_ts = past_timestamps[-1]
-                future_timestamps = generate_future_timestamps(
-                    last_ts, 
-                    fmt=date_fmt, 
-                    count=20, 
-                    interval_minutes=6
-                )
-                
-                if not future_timestamps:
-                    MLOGE(f"Case {case_id}: 未来时间戳生成失败")
-                    continue
+        # [核心修改 3] 基于最后一帧时间戳，生成未来 20 帧
+        last_ts = past_timestamps[-1]
+        future_timestamps = generate_future_timestamps(
+            last_ts, 
+            fmt=date_fmt, 
+            count=20, 
+            interval_minutes=6
+        )
+        
+        if not future_timestamps:
+            continue
 
-                # C. 合并时间戳 (共 30 个: 10过去 + 20未来)
-                full_timestamps = past_timestamps + future_timestamps
-                
-                # D. 构造样本
-                case_samples.append({
-                    "sample_id": f"{case_id}_{case.radar_type}_{(idx+1):03d}",
-                    "timestamps": full_timestamps
-                })
+        # 合并时间戳 (10过去 + 20未来)
+        full_timestamps = past_timestamps + future_timestamps
+        
+        # 构造样本
+        # 样本ID格式: CaseID_RadarType_001
+        sample_data = {
+            "sample_id": f"{case_id}_{case.radar_type}_001",
+            "timestamps": full_timestamps
+        }
 
-            if case_samples:
-                save_samples(case_samples, output_file)
-                right_cnt += 1
-                sample_cnt += len(case_samples)
-                MLOGI(f"Case {case_id}: 生成 {len(case_samples)} 个样本 (10过去 + 20未来)")
+        save_samples([sample_data], output_file)
+        
+        right_cnt += 1
+        sample_cnt += 1
+        MLOGI(f"Case {case_id}: 样本生成成功 (Last TS: {last_ts})")
         
         total_cnt += 1
     
-    MLOGI(f"总个例: {total_cnt}，有效: {right_cnt}，总样本: {sample_cnt}")
+    MLOGI(f"处理完成 | 总个例: {total_cnt} | 有效生成: {right_cnt}")
 
 if __name__ == '__main__':
     main()
