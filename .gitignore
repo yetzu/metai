@@ -184,4 +184,4 @@ lightning_logs/
 bak/
 
 *.log
-*.log.txt
+*log.txt
