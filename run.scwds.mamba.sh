@@ -50,7 +50,7 @@ case $MODE in
             --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
-            --trainer.callbacks.patience 30 \
+            --trainer.callbacks.patience 20 \
             --model.batch_size $BATCH_SIZE \
             --model.in_shape "[31, 256, 256]" \
             --model.obs_seq_len 10 \

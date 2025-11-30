@@ -39,7 +39,14 @@ class ScwdsDataset(Dataset):
        - 运行时采用内存预分配与短路机制，最大化性能。
     """
 
-    def __init__(self, data_path: str, is_train: bool = True, resize_shape: Optional[tuple] = None):
+    def __init__(
+                self, 
+                data_path: str, 
+                is_train: bool = True, 
+                resize_shape: Optional[tuple] = None,
+                testset_name: str = "TestSet",        # [新增] 对应Key中的数据集部分
+                lmdb_filename: Optional[str] = None   # [新增] 强制指定LMDB文件名(无后缀)
+                ):
         """
         初始化数据集。
         
@@ -47,11 +54,17 @@ class ScwdsDataset(Dataset):
             data_path (str): 样本列表文件路径 (.jsonl)。
             is_train (bool): 是否为训练模式 (决定是否加载标签数据)。
             resize_shape (tuple, optional): 目标尺寸 (H, W)。如果为 (256, 256) 或 None，则跳过 Resize 操作。
+            testset_name (str): 推理模式下的数据集名称（如 "TestSet"）。
+            lmdb_filename (str, optional): 强制指定读取的 LMDB 文件名（不带后缀）。
+                                         如果指定（如 "TestSetA"），则忽略样本中的 region_id，
+                                         统一从该文件读取。
         """
         self.data_path = data_path
         self.config = get_config()
         self.samples = self._load_samples_from_jsonl(data_path)
         self.is_train = is_train
+        self.testset_name = testset_name
+        self.lmdb_filename = lmdb_filename
         
         # [优化] 初始化阶段的冗余检测 (Redundancy Check)
         # MetSample 默认输出 256x256。如果目标尺寸也是 256x256，则强制置为 None 以关闭所有 Resize 逻辑。
@@ -135,27 +148,29 @@ class ScwdsDataset(Dataset):
             timestamps=record["timestamps"],
             met_config=self.config,
             is_train=self.is_train,
+            testset_name=self.testset_name
         )
         
         # 2. LMDB 环境注入 (Environment Injection)
-        # 检查当前 Worker 是否已缓存该区域的 LMDB 连接
-        region = sample.region_id
-        if region not in self.envs:
+        # 如果指定了 lmdb_filename (如 "TestSetA")，则用它；否则回退使用 region_id (如 AH, CP)
+        db_key = self.lmdb_filename if self.lmdb_filename else sample.region_id
+ 
+        if db_key not in self.envs:
             try:
                 # 显式转 str 以满足 os.path.join 类型要求
                 root_path = str(sample.lmdb_root)
-                lmdb_path = os.path.join(root_path, f"{region}.lmdb")
+                lmdb_path = os.path.join(root_path, f"{db_key}.lmdb")
                 
                 # 使用只读、无锁模式打开，最大化并发读取性能
-                self.envs[region] = lmdb.open(
+                self.envs[db_key] = lmdb.open(
                     lmdb_path, readonly=True, lock=False, readahead=False, meminit=False
                 )
             except Exception as e:
-                MLOGE(f"Failed to open LMDB for region {region}: {e}")
+                MLOGE(f"Failed to open LMDB for region {db_key}: {e}")
         
         # 将缓存的 env 注入 sample，复用连接
-        if region in self.envs:
-            sample.set_env(self.envs[region])
+        if db_key in self.envs:
+            sample.set_env(self.envs[db_key])
         
         # 3. 读取数据 (MetSample 默认返回 256x256)
         metadata, input_np, target_np, input_mask_np, target_mask_np = sample.to_numpy()
@@ -228,6 +243,8 @@ class ScwdsDataModule(LightningDataModule):
         val_split: float = 0.1,
         test_split: float = 0.1,
         seed: int = 42,
+        testset_name: str = "TestSet", 
+        test_lmdb_name: str = "TestSetA"
     ):
         super().__init__()
         # [重要] 保存超参数，以便 Checkpoint 加载时能恢复 DataModule 配置
@@ -243,6 +260,9 @@ class ScwdsDataModule(LightningDataModule):
         self.pin_memory = pin_memory
         self.seed = seed
 
+        self.testset_name = testset_name
+        self.test_lmdb_name = test_lmdb_name
+
     def setup(self, stage: Optional[str] = None):
         """
         准备数据集 (Splitting & Setup)。
@@ -252,7 +272,9 @@ class ScwdsDataModule(LightningDataModule):
             self.infer_dataset = ScwdsDataset(
                 self.data_path, 
                 is_train=False,
-                resize_shape=self.resize_shape
+                resize_shape=self.resize_shape,
+                testset_name=self.testset_name,
+                lmdb_filename=self.test_lmdb_name
             )
             MLOGI(f"Infer dataset size: {len(self.infer_dataset)}")
             return
