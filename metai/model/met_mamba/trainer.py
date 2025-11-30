@@ -2,6 +2,9 @@ import lightning as l
 import torch
 from typing import Optional, Union, Any, Dict
 
+# 新增导入：用于类型检查
+from timm.scheduler.scheduler import Scheduler as TimmScheduler
+
 from metai.model.core import get_optim_scheduler
 from .model import MeteoMamba
 from .loss import HybridLoss
@@ -73,6 +76,17 @@ class MeteoMambaModule(l.LightningModule):
             }
         }
 
+    # =========================================================
+    # [关键修复] 重写 LR Scheduler Step 逻辑以兼容 timm
+    # =========================================================
+    def lr_scheduler_step(self, scheduler, metric):
+        if isinstance(scheduler, TimmScheduler):
+            # timm 调度器需要显式传入 epoch 参数
+            scheduler.step(epoch=self.current_epoch)
+        else:
+            # PyTorch 原生调度器不需要参数
+            scheduler.step()
+
     def training_step(self, batch, batch_idx):
         _, x, y, _, t_mask = batch
         if t_mask.dtype != torch.float32: t_mask = t_mask.float()
@@ -84,7 +98,7 @@ class MeteoMambaModule(l.LightningModule):
         bs = x.size(0)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
         
-        # 记录分项损失 (loss_focal, loss_grad, loss_corr, loss_dice)
+        # 记录分项损失
         for k, v in loss_dict.items():
             if k != 'total':
                 self.log(f'loss_{k}', v, on_step=False, on_epoch=True, batch_size=bs, sync_dist=True)

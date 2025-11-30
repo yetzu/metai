@@ -7,16 +7,7 @@ from torch.utils.checkpoint import checkpoint
 from timm.layers.drop import DropPath
 from timm.layers.weight_init import trunc_normal_
 
-# 尝试导入 Mamba
-try:
-    from mamba_ssm import Mamba
-    MAMBA_AVAILABLE = True
-except ImportError:
-    MAMBA_AVAILABLE = False
-    class Mamba(nn.Module):
-        def __init__(self, *args, **kwargs):
-            super().__init__()
-            raise ImportError("Please install 'mamba_ssm': pip install mamba-ssm")
+from mamba_ssm import Mamba
 
 # ==========================================
 # 基础组件
