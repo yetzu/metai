@@ -59,7 +59,7 @@ def main():
     df = pd.read_csv(file_path, header=0, names=['case_id', 'size'])
     case_ids = df['case_id'].tolist()
 
-    sample_interval = 30
+    sample_interval = 20
     for case_id in case_ids[:]:
         case = MetCase.create(case_id, config)
         samples = case.to_samples(sample_length=30, sample_interval=sample_interval)

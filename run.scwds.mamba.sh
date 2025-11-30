@@ -73,7 +73,7 @@ case $MODE in
         echo "----------------------------------------"
         
         # 自动寻找 Checkpoint
-        CKPT_PATH=$(find $SAVE_DIR -name "*val_score*.ckpt" | sort -V | tail -n 1)
+        CKPT_PATH=$(find $SAVE_DIR -name "*.ckpt" | sort -V | tail -n 1)
         if [ -z "$CKPT_PATH" ]; then CKPT_PATH=$(find $SAVE_DIR -name "last.ckpt" | head -n 1); fi
         
         if [ -z "$CKPT_PATH" ]; then
