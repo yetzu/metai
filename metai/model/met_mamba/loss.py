@@ -110,7 +110,7 @@ class CorrLoss(nn.Module):
 class GradLoss(nn.Module):
     """
     Unified Spatio-Temporal Gradient Loss.
-    统一计算空间梯度 (纹理) 和时间梯度 (运动) 的差异。
+    Unified calculation of spatial gradient (texture) and temporal gradient (motion) differences.
     """
     def __init__(self, spatial_weight: float = 1.0, temporal_weight: float = 1.0):
         super().__init__()
@@ -120,33 +120,39 @@ class GradLoss(nn.Module):
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         loss = torch.tensor(0.0, device=pred.device)
         
-        # 1. 空间梯度 (Spatial)
+        # 1. Spatial Gradient (Separate H and W calculation)
         if self.w_s > 0:
-            # H/W 方向差分
+            # H/W differences
             p_dx = torch.abs(pred[..., :, 1:] - pred[..., :, :-1])
             p_dy = torch.abs(pred[..., 1:, :] - pred[..., :-1, :])
             t_dx = torch.abs(target[..., :, 1:] - target[..., :, :-1])
             t_dy = torch.abs(target[..., 1:, :] - target[..., :-1, :])
             
-            gdl_s = torch.abs(p_dx - t_dx) + torch.abs(p_dy - t_dy)
+            diff_dx = torch.abs(p_dx - t_dx)
+            diff_dy = torch.abs(p_dy - t_dy)
             
             if mask is not None:
-                m_s = mask[..., 1:, 1:]
-                gdl_s = gdl_s[..., :m_s.shape[-2], :m_s.shape[-1]] * m_s
-                loss += (gdl_s.sum() / (m_s.sum() + 1e-6)) * self.w_s
+                # Use multiplication (*) instead of bitwise AND (&) for Float tensors
+                m_dx = mask[..., :, 1:] * mask[..., :, :-1]
+                loss_dx = (diff_dx * m_dx).sum() / (m_dx.sum() + 1e-6)
+                
+                m_dy = mask[..., 1:, :] * mask[..., :-1, :]
+                loss_dy = (diff_dy * m_dy).sum() / (m_dy.sum() + 1e-6)
+                
+                loss += (loss_dx + loss_dy) * self.w_s
             else:
-                loss += gdl_s.mean() * self.w_s
+                loss += (diff_dx.mean() + diff_dy.mean()) * self.w_s
 
-        # 2. 时间梯度 (Temporal)
+        # 2. Temporal Gradient
         if self.w_t > 0 and pred.shape[1] > 1:
-            # Time 方向差分
             p_dt = pred[:, 1:] - pred[:, :-1]
             t_dt = target[:, 1:] - target[:, :-1]
             
             gdl_t = torch.abs(p_dt - t_dt)
             
             if mask is not None:
-                m_t = mask[:, 1:] & mask[:, :-1]
+                # Use multiplication (*) here as well
+                m_t = mask[:, 1:] * mask[:, :-1]
                 gdl_t = gdl_t * m_t
                 loss += (gdl_t.sum() / (m_t.sum() + 1e-6)) * self.w_t
             else:
