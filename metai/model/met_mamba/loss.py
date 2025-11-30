@@ -117,10 +117,6 @@ class MSSSIMLoss(nn.Module):
         loss = 1.0 - output.mean()
         return loss
 
-# ==========================
-# 其他子损失模块
-# ==========================
-
 class FocalLoss(nn.Module):
     """
     Focal L1 Loss: 结合静态强度加权与动态误差聚焦。

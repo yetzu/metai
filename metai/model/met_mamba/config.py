@@ -34,7 +34,7 @@ class ModelConfig(BaseModel):
     lr: float = 1e-3 
     min_lr: float = 1e-5
     warmup_lr: float = 1e-5
-    warmup_epoch: int = 15
+    warmup_epoch: int = 20
     weight_decay: float = 0.05 
     momentum: float = 0.9
     filter_bias_and_bn: bool = True

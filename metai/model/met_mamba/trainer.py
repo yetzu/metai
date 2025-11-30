@@ -25,12 +25,13 @@ class MeteoMambaModule(l.LightningModule):
                 if hasattr(self.config, k):
                     setattr(self.config, k, v)
 
+        # 保存超参数
         hparams = self.config.to_dict()
         for key in ['batch_size', 'data_path']:
             hparams.pop(key, None)
         self.save_hyperparameters(hparams)
         
-        # 初始化模型
+        # 初始化模型架构
         self.model = MeteoMamba(
             in_shape=self.config.in_shape,
             in_seq_len=self.config.obs_seq_len,
@@ -45,10 +46,10 @@ class MeteoMambaModule(l.LightningModule):
             use_checkpoint=self.config.use_checkpoint
         )
         
-        # 初始化损失 (包含 MS-SSIM)
+        # 初始化混合损失函数
         self.criterion = HybridLoss(
             weight_focal=self.config.weight_focal, 
-            weight_msssim=self.config.weight_msssim, # New
+            weight_msssim=self.config.weight_msssim,
             weight_corr=self.config.weight_corr,
             weight_dice=self.config.weight_dice,
             intensity_weights=self.config.intensity_weights,
@@ -58,12 +59,15 @@ class MeteoMambaModule(l.LightningModule):
             corr_smooth_eps=self.config.corr_smooth_eps
         )
         
+        # 验证集评估指标
         self.valid_scorer = MetScore()
 
     def forward(self, x):
+        """标准推理入口，直接调用内部模型。"""
         return self.model(x)
 
     def configure_optimizers(self) -> Dict[str, Any]:
+        """配置优化器和学习率调度器。"""
         optimizer, scheduler, by_epoch = get_optim_scheduler(
             self.config, self.config.max_epochs, self.model
         )
@@ -76,16 +80,21 @@ class MeteoMambaModule(l.LightningModule):
         }
 
     def optimizer_zero_grad(self, epoch, batch_idx, optimizer):
+        """优化梯度置零策略，使用 set_to_none=True 提高性能。"""
         optimizer.zero_grad(set_to_none=True)
 
     def lr_scheduler_step(self, scheduler: Any, metric: Any):
+        """自定义调度器步进逻辑，兼容 timm 调度器。"""
         if any(isinstance(scheduler, sch) for sch in timm_schedulers):
             scheduler.step(epoch=self.current_epoch)
         else:
             scheduler.step(metric) if metric is not None else scheduler.step()
 
     def on_train_epoch_start(self):
-        """课程学习策略：动态调整 Loss 权重"""
+        """
+        课程学习策略 (Curriculum Learning)：
+        在训练初期动态调整 Loss 权重，从易到难。
+        """
         if not self.config.use_curriculum_learning:
             return
 
@@ -129,10 +138,14 @@ class MeteoMambaModule(l.LightningModule):
             progress = self.current_epoch / float(self.config.max_epochs)
             if progress < 0.2:
                 valid_len = 10
-                # t_mask: [B, T, H, W]
+                # t_mask shape: [B, T, C, H, W] (e.g., [4, 20, 1, 256, 256])
                 # 将 T > 10 的部分 mask 置 0
-                time_mask = torch.ones((1, y.shape[1], 1, 1), device=self.device)
-                time_mask[:, valid_len:, :, :] = 0.0
+                
+                # [关键修复] 构造 5D mask [1, T, 1, 1, 1] 以正确匹配维度
+                # 之前错误的 [1, T, 1, 1] 会导致广播错误生成 [B, T, T, H, W]
+                time_mask = torch.ones((1, y.shape[1], 1, 1, 1), device=self.device)
+                time_mask[:, valid_len:, :, :, :] = 0.0
+                
                 t_mask = t_mask * time_mask
 
         pred = torch.clamp(self.model(x), 0.0, 1.0)

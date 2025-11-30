@@ -69,13 +69,13 @@ case $MODE in
             --model.warmup_epoch 20 \
             --model.lr 1e-3 \
             --model.min_lr 1e-6 \
-            --model.weight_focal 1 \
+            --model.weight_focal 5 \
             --model.weight_msssim 1 \
-            --model.weight_corr 1.0 \
-            --model.weight_dice 2.0 \
+            --model.weight_corr 0.5 \
+            --model.weight_dice 1.0 \
             --model.focal_alpha 2.0 \
             --model.focal_gamma 1.0 \
-            --model.false_alarm_penalty 10.0 \
+            --model.false_alarm_penalty 5.0 \
             --data.data_path $DATA_PATH \
             --data.batch_size $BATCH_SIZE \
             --data.num_workers 8
@@ -104,7 +104,7 @@ case $MODE in
             --in_shape 31 256 256 \
             --obs_seq_len 10 \
             --pred_seq_len 20 \
-            --num_samples 10 \
+            --num_samples 20 \
             --accelerator cuda:0 \
             
         ;;
