@@ -105,7 +105,7 @@ case $MODE in
             --in_shape 31 256 256 \
             --obs_seq_len 10 \
             --pred_seq_len 20 \
-            --num_samples 20 \
+            --num_samples 10 \
             --accelerator cuda:0 \
             
         ;;
