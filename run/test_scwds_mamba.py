@@ -23,7 +23,7 @@ from metai.utils import MetLabel
 # 常量配置
 # ==========================================
 THRESHOLDS = [0.1, 1.0, 2.0, 5.0, 8.0]
-MIN_VALID_RAIN_MM = 0.1
+MIN_VALID_RAIN_MM = 0.05
 PHYSICAL_MAX = 30.0
 
 class TeeLogger:
@@ -78,28 +78,29 @@ def plot_seq_visualization(obs_seq, true_seq, pred_seq, out_path, vmax=30.0):
         if t < obs_seq.shape[0]:
             im = obs_seq[t]
             if im.ndim == 3: im = im[0] 
-            # [修改] 使用 cmap_rain (bwr)
-            axes[0, t].imshow(im, cmap=cmap_rain, vmin=0.0, vmax=1.0)
-            if t == 0: axes[0, t].set_ylabel('Obs (Norm)', fontsize=8)
+            # 【修正点 1】: 将 vmax 从硬编码的 1.0 改为 vmax (即 30.0)，以适配 mm 单位。
+            axes[0, t].imshow(im, cmap=cmap_rain, vmin=0.0, vmax=vmax)
+            # 【修正点 2】: 将标签改为 Obs (mm)，以匹配 denormalize_to_mm 的操作。
+            if t == 0: axes[0, t].set_ylabel('Obs (mm)', fontsize=8) 
         else:
             axes[0, t].set_visible(False)
         axes[0, t].axis('off')
         
-        # Row 1: GT [T, C, H, W]
+        # Row 1: GT [T, C, H, W] (保持不变)
         im_gt = true_seq[t]
         if im_gt.ndim == 3: im_gt = im_gt[0]
         axes[1, t].imshow(im_gt, cmap=cmap_rain, vmin=0.0, vmax=vmax)
         axes[1, t].axis('off')
         if t == 0: axes[1, t].set_ylabel('GT (mm)', fontsize=8)
         
-        # Row 2: Pred
+        # Row 2: Pred (保持不变)
         im_pred = pred_seq[t]
         if im_pred.ndim == 3: im_pred = im_pred[0]
         axes[2, t].imshow(im_pred, cmap=cmap_rain, vmin=0.0, vmax=vmax)
         axes[2, t].axis('off')
         if t == 0: axes[2, t].set_ylabel('Pred (mm)', fontsize=8)
         
-        # Row 3: Diff
+        # Row 3: Diff (保持不变)
         gt_s = true_seq[t][0] if true_seq[t].ndim == 3 else true_seq[t]
         pd_s = pred_seq[t][0] if pred_seq[t].ndim == 3 else pred_seq[t]
         diff = gt_s - pd_s
