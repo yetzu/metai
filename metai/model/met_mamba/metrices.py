@@ -5,7 +5,7 @@ from typing import Dict, Optional
 
 class MetScore(nn.Module):
     """
-    竞赛评分标准计算器模块。
+    竞赛评分计算器模块。
     
     支持 Log Space 反归一化，确保在物理空间 (mm) 计算指标。
     """
