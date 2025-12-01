@@ -67,7 +67,7 @@ case $MODE in
             --model.mamba_expand 2 \
             --model.use_checkpoint true \
             --model.warmup_epoch 20 \
-            --model.lr 1e-3 \
+            --model.lr 5e-4 \
             --model.min_lr 1e-6 \
             --model.weight_focal 5 \
             --model.weight_msssim 1 \

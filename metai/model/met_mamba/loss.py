@@ -5,6 +5,9 @@ import torch.nn.functional as F
 import math
 from typing import Optional, List, Dict, Tuple
 
+# 引入 TorchMetrics 以获得更稳定的 MS-SSIM 计算
+from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
+
 # ==========================
 # 物理常量与工具
 # ==========================
@@ -16,106 +19,8 @@ def mm_to_lognorm(mm_val: float) -> float:
     return math.log(mm_val + 1) / LOG_NORM_FACTOR
 
 # ==========================
-# MS-SSIM 实现 (纯 PyTorch)
+# 基础 Loss 实现
 # ==========================
-
-def gaussian_kernel(window_size, sigma):
-    """生成一维高斯核"""
-    gauss = torch.Tensor([math.exp(-(x - window_size // 2) ** 2 / float(2 * sigma ** 2)) for x in range(window_size)])
-    return gauss / gauss.sum()
-
-def create_window(window_size, channel):
-    """生成二维高斯窗口"""
-    _1D_window = gaussian_kernel(window_size, 1.5).unsqueeze(1)
-    _2D_window = _1D_window.mm(_1D_window.t()).float().unsqueeze(0).unsqueeze(0)
-    window = _2D_window.expand(channel, 1, window_size, window_size).contiguous()
-    return window
-
-class MSSSIMLoss(nn.Module):
-    """
-    多尺度结构相似性损失 (MS-SSIM Loss)。
-    相比普通的 L1/L2 损失，能更好地保持图像的结构和纹理，减少模糊感。
-    """
-    def __init__(self, window_size=11, size_average=True, channel=1):
-        super(MSSSIMLoss, self).__init__()
-        self.window_size = window_size
-        self.size_average = size_average
-        self.channel = channel
-        self.window = create_window(window_size, self.channel)
-        # MS-SSIM 权重参数 (根据原论文设置)
-        self.weights = torch.FloatTensor([0.0448, 0.2856, 0.3001, 0.2363, 0.1333])
-
-    def _ssim(self, img1, img2, window, metric='ssim'):
-        padding = self.window_size // 2
-        mu1 = F.conv2d(img1, window, padding=padding, groups=self.channel)
-        mu2 = F.conv2d(img2, window, padding=padding, groups=self.channel)
-
-        mu1_sq = mu1.pow(2)
-        mu2_sq = mu2.pow(2)
-        mu1_mu2 = mu1 * mu2
-
-        sigma1_sq = F.conv2d(img1 * img1, window, padding=padding, groups=self.channel) - mu1_sq
-        sigma2_sq = F.conv2d(img2 * img2, window, padding=padding, groups=self.channel) - mu2_sq
-        sigma12 = F.conv2d(img1 * img2, window, padding=padding, groups=self.channel) - mu1_mu2
-
-        C1 = 0.01 ** 2
-        C2 = 0.03 ** 2
-
-        ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
-        
-        if metric == 'cs':
-            # 对比度敏感度 (Structure)
-            return ((2 * sigma12 + C2) / (sigma1_sq + sigma2_sq + C2)).mean(dim=(1, 2, 3))
-        
-        return ssim_map.mean(dim=(1, 2, 3))
-
-    def forward(self, pred, target, mask=None):
-        """
-        计算 MS-SSIM 损失。
-        注意: MS-SSIM 通常对全图计算，暂不支持 mask (若有 mask 建议先对图像进行 masking 处理)。
-        """
-        # 展平 Batch 和 Time 维度: [B, T, C, H, W] -> [B*T, C, H, W]
-        if pred.ndim == 5:
-            b, t, c, h, w = pred.shape
-            img1 = pred.view(-1, c, h, w)
-            img2 = target.view(-1, c, h, w)
-        else:
-            img1 = pred
-            img2 = target
-        
-        # 动态适配 Device
-        if self.window.device != img1.device:
-            self.window = self.window.to(img1.device)
-            self.weights = self.weights.to(img1.device)
-
-        msssim = []
-        mcs = []
-        
-        for i in range(len(self.weights)):
-            # 最后一个尺度计算完整的 SSIM，其他尺度计算 CS (Contrast Sensitivity)
-            if i == len(self.weights) - 1:
-                ssim_val = self._ssim(img1, img2, self.window, metric='ssim')
-                msssim.append(ssim_val)
-            else:
-                cs_val = self._ssim(img1, img2, self.window, metric='cs')
-                mcs.append(cs_val)
-                
-                # 下采样 (Average Pooling)
-                img1 = F.avg_pool2d(img1, (2, 2))
-                img2 = F.avg_pool2d(img2, (2, 2))
-
-        # 堆叠并计算加权 MS-SSIM
-        msssim = torch.stack(msssim)
-        mcs = torch.stack(mcs)
-        
-        # MS-SSIM = (Product of CS^weight for i=1..M-1) * (SSIM^weight for i=M)
-        # Loss = 1 - MS-SSIM
-        p1 = (mcs ** self.weights[:-1].view(-1, 1))
-        p2 = (msssim ** self.weights[-1].view(-1, 1))
-        output = torch.prod(p1, dim=0) * p2
-        
-        loss = 1.0 - output.mean()
-        return loss
 
 class FocalLoss(nn.Module):
     """
@@ -245,7 +150,7 @@ class DiceLoss(nn.Module):
 class HybridLoss(nn.Module):
     """
     混合损失函数 (Hybrid Loss)。
-    集成 Focal, MS-SSIM, Corr, Dice 四大分量，全面优化预测质量。
+    集成 Focal, MS-SSIM (via torchmetrics), Corr, Dice 四大分量。
     """
     def __init__(self, 
                  weight_focal: float = 1.0, 
@@ -268,27 +173,54 @@ class HybridLoss(nn.Module):
             'dice': weight_dice
         }
         
-        # 1. Focal Loss (强度准确性与模糊控制)
+        # 1. Focal Loss
         self.loss_focal = FocalLoss(
-            weights_val=intensity_weights,
-            alpha=focal_alpha,
-            gamma=focal_gamma,
+            weights_val=intensity_weights, alpha=focal_alpha, gamma=focal_gamma,
             false_alarm_penalty=false_alarm_penalty
         )
-        # 2. MS-SSIM Loss (结构与纹理保持)
-        self.loss_msssim = MSSSIMLoss(channel=1) # 降水通常是单通道
-        # 3. Corr Loss (空间分布一致性)
+        
+        # 2. MS-SSIM Loss (替换为 torchmetrics)
+        # data_range=1.0: 对应归一化后的数据范围
+        # kernel_size=11: 默认窗口大小
+        self.loss_msssim = MultiScaleStructuralSimilarityIndexMeasure(
+            data_range=1.0, 
+            kernel_size=11,
+            reduction='elementwise_mean'
+        )
+        
+        # 3. Corr Loss
         self.loss_corr = CorrLoss(eps=corr_smooth_eps)
-        # 4. Dice Loss (TS 评分优化)
+        
+        # 4. Dice Loss
         self.loss_dice = DiceLoss()
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        # 计算各个分项 Loss
         l_focal = self.loss_focal(pred, target, mask)
-        # MS-SSIM 计算通常不接受 mask，因此对全图计算
-        l_msssim = self.loss_msssim(pred, target) 
         l_corr = self.loss_corr(pred, target, mask)
         l_dice = self.loss_dice(pred, target, mask)
         
+        # === MS-SSIM 计算 ===
+        # 需要将 (B, T, C, H, W) 或 (B, T, H, W) 展平为 (N, C, H, W)
+        p_ssim = pred
+        t_ssim = target
+        
+        # 1. 确保有 Channel 维度: (B, T, H, W) -> (B, T, 1, H, W)
+        if p_ssim.ndim == 4:
+            p_ssim = p_ssim.unsqueeze(2)
+            t_ssim = t_ssim.unsqueeze(2)
+            
+        # 2. 展平时间维度: (B, T, C, H, W) -> (B*T, C, H, W)
+        if p_ssim.ndim == 5:
+            b, t, c, h, w = p_ssim.shape
+            p_ssim = p_ssim.reshape(-1, c, h, w)
+            t_ssim = t_ssim.reshape(-1, c, h, w)
+        
+        # 3. 计算 Metric 并转为 Loss (Loss = 1 - SSIM)
+        # torchmetrics 内部处理了数值稳定性
+        ssim_score = self.loss_msssim(p_ssim, t_ssim)
+        l_msssim = 1.0 - ssim_score
+
         # 加权求和
         total = (self.weights['focal'] * l_focal + 
                  self.weights['msssim'] * l_msssim + 

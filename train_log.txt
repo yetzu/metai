@@ -8,19 +8,19 @@ GPU available: True (cuda), used: True
 TPU available: False, using: 0 TPU cores
 HPU available: False, using: 0 HPUs
 Initializing distributed: GLOBAL_RANK: 0, MEMBER: 1/3
-[rank: 2] Seed set to 42
 [rank: 1] Seed set to 42
-Initializing distributed: GLOBAL_RANK: 2, MEMBER: 3/3
+[rank: 2] Seed set to 42
 Initializing distributed: GLOBAL_RANK: 1, MEMBER: 2/3
+Initializing distributed: GLOBAL_RANK: 2, MEMBER: 3/3
 ----------------------------------------------------------------------------------------------------
 distributed_backend=nccl
 All distributed processes registered. Starting with 3 processes
 ----------------------------------------------------------------------------------------------------
 
 NCCL version 2.27.3+cuda12.9
-LOCAL_RANK: 1 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 LOCAL_RANK: 2 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
+LOCAL_RANK: 1 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/utilities/model_summary/model_summary.py:231: Precision bf16-mixed is not supported by the model summary.  Estimated model size in MB will not be accurate. Using 32 bits instead.
 
   | Name         | Type       | Params | Mode 
@@ -35,8 +35,8 @@ LOCAL_RANK: 2 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 139.511   Total estimated model params size (MB)
 205       Modules in train mode
 0         Modules in eval mode
-[2025-12-01 01:44:17.127] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
-[2025-12-01 01:44:17.197] [INFO] Dataset split: Train=5839, Val=729, Test=731
+[2025-12-01 09:56:06.954] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
+[2025-12-01 09:56:07.023] [INFO] Dataset split: Train=5839, Val=729, Test=731
 Param groups = {
   "decay": {
     "weight_decay": 0.05,
@@ -239,8 +239,8 @@ Param groups = {
     "lr_scale": 1.0
   }
 }
-Sanity Checking: |          | 0/? [00:00<?, ?it/s][2025-12-01 01:44:16.592] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
-[2025-12-01 01:44:16.668] [INFO] Dataset split: Train=5839, Val=729, Test=731
+Sanity Checking: |          | 0/? [00:00<?, ?it/s][2025-12-01 09:56:06.734] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
+[2025-12-01 09:56:06.809] [INFO] Dataset split: Train=5839, Val=729, Test=731
 Param groups = {
   "decay": {
     "weight_decay": 0.05,
@@ -443,8 +443,8 @@ Param groups = {
     "lr_scale": 1.0
   }
 }
-[2025-12-01 01:44:16.593] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
-[2025-12-01 01:44:16.668] [INFO] Dataset split: Train=5839, Val=729, Test=731
+[2025-12-01 09:56:06.734] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
+[2025-12-01 09:56:06.809] [INFO] Dataset split: Train=5839, Val=729, Test=731
 Param groups = {
   "decay": {
     "weight_decay": 0.05,
@@ -647,7 +647,7 @@ Param groups = {
     "lr_scale": 1.0
   }
 }
-Sanity Checking: |          | 0/? [00:00<?, ?it/s]Sanity Checking DataLoader 0:   0%|          | 0/2 [00:00<?, ?it/s]Sanity Checking DataLoader 0:  50%|█████     | 1/2 [00:13<00:13,  0.07it/s]Sanity Checking DataLoader 0: 100%|██████████| 2/2 [00:15<00:00,  0.13it/s]                                                                           Training: |          | 0/? [00:00<?, ?it/s]Training: |          | 0/? [00:00<?, ?it/s]Epoch 0:   0%|          | 0/487 [00:00<?, ?it/s]/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/autograd/graph.py:829: UserWarning: Grad strides do not match bucket view strides. This may indicate grad was not created according to the gradient layout contract, or that the param's strides changed since DDP was constructed.  This is not an error, but may impair performance.
+Sanity Checking: |          | 0/? [00:00<?, ?it/s]Sanity Checking DataLoader 0:   0%|          | 0/2 [00:00<?, ?it/s]Sanity Checking DataLoader 0:  50%|█████     | 1/2 [00:07<00:07,  0.13it/s]Sanity Checking DataLoader 0: 100%|██████████| 2/2 [00:08<00:00,  0.22it/s]                                                                           Training: |          | 0/? [00:00<?, ?it/s]Training: |          | 0/? [00:00<?, ?it/s]Epoch 0:   0%|          | 0/487 [00:00<?, ?it/s]/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/autograd/graph.py:829: UserWarning: Grad strides do not match bucket view strides. This may indicate grad was not created according to the gradient layout contract, or that the param's strides changed since DDP was constructed.  This is not an error, but may impair performance.
 grad.sizes() = [2048, 1, 3, 3], strides() = [9, 1, 3, 1]
 bucket_view.sizes() = [2048, 1, 3, 3], strides() = [9, 9, 3, 1] (Triggered internally at /pytorch/torch/csrc/distributed/c10d/reducer.cpp:334.)
   return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
@@ -659,4 +659,305 @@ bucket_view.sizes() = [2048, 1, 3, 3], strides() = [9, 9, 3, 1] (Triggered inter
 grad.sizes() = [2048, 1, 3, 3], strides() = [9, 1, 3, 1]
 bucket_view.sizes() = [2048, 1, 3, 3], strides() = [9, 9, 3, 1] (Triggered internally at /pytorch/torch/csrc/distributed/c10d/reducer.cpp:334.)
   return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
-Epoch 0:   0%|          | 1/487 [00:38<5:11:27,  0.03it/s]Epoch 0:   0%|          | 1/487 [00:38<5:11:27,  0.03it/s, v_num=1, train_loss_step=4.860]Epoch 0:   0%|          | 2/487 [00:42<2:50:22,  0.05it/s, v_num=1, train_loss_step=4.860]Epoch 0:   0%|          | 2/487 [00:42<2:52:44,  0.05it/s, v_num=1, train_loss_step=5.430]Epoch 0:   1%|          | 3/487 [00:46<2:04:56,  0.06it/s, v_num=1, train_loss_step=5.430]Epoch 0:   1%|          | 3/487 [00:47<2:06:42,  0.06it/s, v_num=1, train_loss_step=5.530]Epoch 0:   1%|          | 4/487 [00:49<1:40:31,  0.08it/s, v_num=1, train_loss_step=5.530]Epoch 0:   1%|          | 4/487 [00:50<1:41:54,  0.08it/s, v_num=1, train_loss_step=5.030]Epoch 0:   1%|          | 5/487 [00:53<1:25:58,  0.09it/s, v_num=1, train_loss_step=5.030]Epoch 0:   1%|          | 5/487 [00:54<1:26:55,  0.09it/s, v_num=1, train_loss_step=5.930]Epoch 0:   1%|          | 6/487 [00:56<1:16:03,  0.11it/s, v_num=1, train_loss_step=5.930]Epoch 0:   1%|          | 6/487 [00:57<1:16:51,  0.10it/s, v_num=1, train_loss_step=4.540]Epoch 0:   1%|▏         | 7/487 [01:00<1:08:58,  0.12it/s, v_num=1, train_loss_step=4.540]Epoch 0:   1%|▏         | 7/487 [01:01<1:09:48,  0.11it/s, v_num=1, train_loss_step=4.360]Epoch 0:   2%|▏         | 8/487 [01:04<1:04:00,  0.12it/s, v_num=1, train_loss_step=4.360]Epoch 0:   2%|▏         | 8/487 [01:04<1:04:47,  0.12it/s, v_num=1, train_loss_step=4.490]Epoch 0:   2%|▏         | 9/487 [01:08<1:00:12,  0.13it/s, v_num=1, train_loss_step=4.490]Epoch 0:   2%|▏         | 9/487 [01:08<1:00:44,  0.13it/s, v_num=1, train_loss_step=3.920]Epoch 0:   2%|▏         | 10/487 [01:11<56:47,  0.14it/s, v_num=1, train_loss_step=3.920] Epoch 0:   2%|▏         | 10/487 [01:12<57:16,  0.14it/s, v_num=1, train_loss_step=3.460]
+Epoch 0:   0%|          | 1/487 [00:36<4:51:39,  0.03it/s]Epoch 0:   0%|          | 1/487 [00:36<4:51:39,  0.03it/s, v_num=0, train_loss_step=4.860]Epoch 0:   0%|          | 2/487 [00:39<2:38:35,  0.05it/s, v_num=0, train_loss_step=4.860]Epoch 0:   0%|          | 2/487 [00:39<2:40:39,  0.05it/s, v_num=0, train_loss_step=5.430]Epoch 0:   1%|          | 3/487 [00:42<1:55:17,  0.07it/s, v_num=0, train_loss_step=5.430]Epoch 0:   1%|          | 3/487 [00:43<1:56:44,  0.07it/s, v_num=0, train_loss_step=5.530]Epoch 0:   1%|          | 4/487 [00:46<1:33:51,  0.09it/s, v_num=0, train_loss_step=5.530]Epoch 0:   1%|          | 4/487 [00:46<1:34:26,  0.09it/s, v_num=0, train_loss_step=5.030]Epoch 0:   1%|          | 5/487 [00:49<1:20:19,  0.10it/s, v_num=0, train_loss_step=5.030]Epoch 0:   1%|          | 5/487 [00:50<1:21:11,  0.10it/s, v_num=0, train_loss_step=5.930]Epoch 0:   1%|          | 6/487 [00:53<1:11:38,  0.11it/s, v_num=0, train_loss_step=5.930]Epoch 0:   1%|          | 6/487 [00:54<1:12:29,  0.11it/s, v_num=0, train_loss_step=4.540]Epoch 0:   1%|▏         | 7/487 [00:56<1:05:05,  0.12it/s, v_num=0, train_loss_step=4.540]Epoch 0:   1%|▏         | 7/487 [00:57<1:05:46,  0.12it/s, v_num=0, train_loss_step=4.360]Epoch 0:   2%|▏         | 8/487 [01:00<1:00:06,  0.13it/s, v_num=0, train_loss_step=4.360]Epoch 0:   2%|▏         | 8/487 [01:00<1:00:42,  0.13it/s, v_num=0, train_loss_step=4.480]Epoch 0:   2%|▏         | 9/487 [01:03<56:14,  0.14it/s, v_num=0, train_loss_step=4.480]  Epoch 0:   2%|▏         | 9/487 [01:04<56:46,  0.14it/s, v_num=0, train_loss_step=3.920]Epoch 0:   2%|▏         | 10/487 [01:06<53:08,  0.15it/s, v_num=0, train_loss_step=3.920]Epoch 0:   2%|▏         | 10/487 [01:07<53:36,  0.15it/s, v_num=0, train_loss_step=3.460]Epoch 0:   2%|▏         | 11/487 [01:10<50:35,  0.16it/s, v_num=0, train_loss_step=3.460]Epoch 0:   2%|▏         | 11/487 [01:10<51:01,  0.16it/s, v_num=0, train_loss_step=4.200]Epoch 0:   2%|▏         | 12/487 [01:13<48:42,  0.16it/s, v_num=0, train_loss_step=4.200]Epoch 0:   2%|▏         | 12/487 [01:14<48:51,  0.16it/s, v_num=0, train_loss_step=4.080]Epoch 0:   3%|▎         | 13/487 [01:17<46:54,  0.17it/s, v_num=0, train_loss_step=4.080]Epoch 0:   3%|▎         | 13/487 [01:17<47:09,  0.17it/s, v_num=0, train_loss_step=4.680]Epoch 0:   3%|▎         | 14/487 [01:20<45:27,  0.17it/s, v_num=0, train_loss_step=4.680]Epoch 0:   3%|▎         | 14/487 [01:21<45:49,  0.17it/s, v_num=0, train_loss_step=3.250]Epoch 0:   3%|▎         | 15/487 [01:24<44:33,  0.18it/s, v_num=0, train_loss_step=3.250]Epoch 0:   3%|▎         | 15/487 [01:25<44:52,  0.18it/s, v_num=0, train_loss_step=3.310]Epoch 0:   3%|▎         | 16/487 [01:28<43:18,  0.18it/s, v_num=0, train_loss_step=3.310]Epoch 0:   3%|▎         | 16/487 [01:28<43:36,  0.18it/s, v_num=0, train_loss_step=2.580]Epoch 0:   3%|▎         | 17/487 [01:31<42:12,  0.19it/s, v_num=0, train_loss_step=2.580]Epoch 0:   3%|▎         | 17/487 [01:32<42:28,  0.18it/s, v_num=0, train_loss_step=3.060]Epoch 0:   4%|▎         | 18/487 [01:34<41:12,  0.19it/s, v_num=0, train_loss_step=3.060]Epoch 0:   4%|▎         | 18/487 [01:35<41:28,  0.19it/s, v_num=0, train_loss_step=2.430]Epoch 0:   4%|▍         | 19/487 [01:38<40:18,  0.19it/s, v_num=0, train_loss_step=2.430]Epoch 0:   4%|▍         | 19/487 [01:38<40:33,  0.19it/s, v_num=0, train_loss_step=4.390]Epoch 0:   4%|▍         | 20/487 [01:41<39:30,  0.20it/s, v_num=0, train_loss_step=4.390]Epoch 0:   4%|▍         | 20/487 [01:42<39:44,  0.20it/s, v_num=0, train_loss_step=3.880]Epoch 0:   4%|▍         | 21/487 [01:44<38:45,  0.20it/s, v_num=0, train_loss_step=3.880]Epoch 0:   4%|▍         | 21/487 [01:45<38:58,  0.20it/s, v_num=0, train_loss_step=4.330]Epoch 0:   5%|▍         | 22/487 [01:48<38:05,  0.20it/s, v_num=0, train_loss_step=4.330]Epoch 0:   5%|▍         | 22/487 [01:48<38:18,  0.20it/s, v_num=0, train_loss_step=4.460]Epoch 0:   5%|▍         | 23/487 [01:51<37:34,  0.21it/s, v_num=0, train_loss_step=4.460]Epoch 0:   5%|▍         | 23/487 [01:52<37:43,  0.20it/s, v_num=0, train_loss_step=4.050]Epoch 0:   5%|▍         | 24/487 [01:55<37:02,  0.21it/s, v_num=0, train_loss_step=4.050]Epoch 0:   5%|▍         | 24/487 [01:55<37:12,  0.21it/s, v_num=0, train_loss_step=5.580]Epoch 0:   5%|▌         | 25/487 [01:59<36:44,  0.21it/s, v_num=0, train_loss_step=5.580]Epoch 0:   5%|▌         | 25/487 [01:59<36:52,  0.21it/s, v_num=0, train_loss_step=3.860]Epoch 0:   5%|▌         | 26/487 [02:02<36:15,  0.21it/s, v_num=0, train_loss_step=3.860]Epoch 0:   5%|▌         | 26/487 [02:03<36:25,  0.21it/s, v_num=0, train_loss_step=4.180]Epoch 0:   6%|▌         | 27/487 [02:06<35:51,  0.21it/s, v_num=0, train_loss_step=4.180]Epoch 0:   6%|▌         | 27/487 [02:06<36:00,  0.21it/s, v_num=0, train_loss_step=3.090]Epoch 0:   6%|▌         | 28/487 [02:09<35:28,  0.22it/s, v_num=0, train_loss_step=3.090]Epoch 0:   6%|▌         | 28/487 [02:10<35:36,  0.21it/s, v_num=0, train_loss_step=5.450]Epoch 0:   6%|▌         | 29/487 [02:13<35:07,  0.22it/s, v_num=0, train_loss_step=5.450]Epoch 0:   6%|▌         | 29/487 [02:14<35:17,  0.22it/s, v_num=0, train_loss_step=3.490]Epoch 0:   6%|▌         | 30/487 [02:16<34:43,  0.22it/s, v_num=0, train_loss_step=3.490]Epoch 0:   6%|▌         | 30/487 [02:17<34:52,  0.22it/s, v_num=0, train_loss_step=4.120]Epoch 0:   6%|▋         | 31/487 [02:20<34:21,  0.22it/s, v_num=0, train_loss_step=4.120]Epoch 0:   6%|▋         | 31/487 [02:20<34:29,  0.22it/s, v_num=0, train_loss_step=3.440]Epoch 0:   7%|▋         | 32/487 [02:23<33:59,  0.22it/s, v_num=0, train_loss_step=3.440]Epoch 0:   7%|▋         | 32/487 [02:24<34:08,  0.22it/s, v_num=0, train_loss_step=3.780]Epoch 0:   7%|▋         | 33/487 [02:26<33:39,  0.22it/s, v_num=0, train_loss_step=3.780]Epoch 0:   7%|▋         | 33/487 [02:27<33:47,  0.22it/s, v_num=0, train_loss_step=6.270]Epoch 0:   7%|▋         | 34/487 [02:30<33:20,  0.23it/s, v_num=0, train_loss_step=6.270]Epoch 0:   7%|▋         | 34/487 [02:30<33:28,  0.23it/s, v_num=0, train_loss_step=4.520]Epoch 0:   7%|▋         | 35/487 [02:33<33:01,  0.23it/s, v_num=0, train_loss_step=4.520]Epoch 0:   7%|▋         | 35/487 [02:34<33:09,  0.23it/s, v_num=0, train_loss_step=6.570]Epoch 0:   7%|▋         | 36/487 [02:36<32:45,  0.23it/s, v_num=0, train_loss_step=6.570]Epoch 0:   7%|▋         | 36/487 [02:37<32:54,  0.23it/s, v_num=0, train_loss_step=3.160]Epoch 0:   8%|▊         | 37/487 [02:40<32:37,  0.23it/s, v_num=0, train_loss_step=3.160]Epoch 0:   8%|▊         | 37/487 [02:41<32:42,  0.23it/s, v_num=0, train_loss_step=2.340]Epoch 0:   8%|▊         | 38/487 [02:44<32:21,  0.23it/s, v_num=0, train_loss_step=2.340]Epoch 0:   8%|▊         | 38/487 [02:44<32:29,  0.23it/s, v_num=0, train_loss_step=1.250]Epoch 0:   8%|▊         | 39/487 [02:47<32:09,  0.23it/s, v_num=0, train_loss_step=1.250]Epoch 0:   8%|▊         | 39/487 [02:48<32:16,  0.23it/s, v_num=0, train_loss_step=4.650]Epoch 0:   8%|▊         | 40/487 [02:51<32:00,  0.23it/s, v_num=0, train_loss_step=4.650]Epoch 0:   8%|▊         | 40/487 [02:52<32:05,  0.23it/s, v_num=0, train_loss_step=4.190]Epoch 0:   8%|▊         | 41/487 [02:55<31:52,  0.23it/s, v_num=0, train_loss_step=4.190]Epoch 0:   8%|▊         | 41/487 [02:56<32:00,  0.23it/s, v_num=0, train_loss_step=4.050]Epoch 0:   9%|▊         | 42/487 [02:59<31:41,  0.23it/s, v_num=0, train_loss_step=4.050]Epoch 0:   9%|▊         | 42/487 [03:00<31:49,  0.23it/s, v_num=0, train_loss_step=5.650]Epoch 0:   9%|▉         | 43/487 [03:02<31:28,  0.24it/s, v_num=0, train_loss_step=5.650]Epoch 0:   9%|▉         | 43/487 [03:03<31:35,  0.23it/s, v_num=0, train_loss_step=5.610][rank: 0] Received SIGTERM: 15
+[rank: 2] Received SIGTERM: 15
+[rank: 1] Received SIGTERM: 15
+[rank2]: Traceback (most recent call last):
+[rank2]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
+[rank2]:     main()
+[rank2]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
+[rank2]:     cli = LightningCLI(
+[rank2]:           ^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
+[rank2]:     self._run_subcommand(self.subcommand)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
+[rank2]:     fn(**fn_kwargs)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
+[rank2]:     call._call_and_handle_interrupt(
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
+[rank2]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
+[rank2]:     return function(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
+[rank2]:     self._run(model, ckpt_path=ckpt_path)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
+[rank2]:     results = self._run_stage()
+[rank2]:               ^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1055, in _run_stage
+[rank2]:     self.fit_loop.run()
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 216, in run
+[rank2]:     self.advance()
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 458, in advance
+[rank2]:     self.epoch_loop.run(self._data_fetcher)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 152, in run
+[rank2]:     self.advance(data_fetcher)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 348, in advance
+[rank2]:     batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+[rank2]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 192, in run
+[rank2]:     self._optimizer_step(batch_idx, closure)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 270, in _optimizer_step
+[rank2]:     call._call_lightning_module_hook(
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 177, in _call_lightning_module_hook
+[rank2]:     output = fn(*args, **kwargs)
+[rank2]:              ^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 1366, in optimizer_step
+[rank2]:     optimizer.step(closure=optimizer_closure)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/optimizer.py", line 154, in step
+[rank2]:     step_output = self._strategy.optimizer_step(self._optimizer, closure, **kwargs)
+[rank2]:                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/ddp.py", line 273, in optimizer_step
+[rank2]:     optimizer_output = super().optimizer_step(optimizer, closure, model, **kwargs)
+[rank2]:                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 239, in optimizer_step
+[rank2]:     return self.precision_plugin.optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/amp.py", line 76, in optimizer_step
+[rank2]:     return super().optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/precision.py", line 123, in optimizer_step
+[rank2]:     return optimizer.step(closure=closure, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/optim/optimizer.py", line 516, in wrapper
+[rank2]:     out = func(*args, **kwargs)
+[rank2]:           ^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/optim/optimizer.py", line 81, in _use_grad
+[rank2]:     ret = func(*args, **kwargs)
+[rank2]:           ^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/optim/adam.py", line 226, in step
+[rank2]:     loss = closure()
+[rank2]:            ^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/precision.py", line 109, in _wrap_closure
+[rank2]:     closure_result = closure()
+[rank2]:                      ^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 146, in __call__
+[rank2]:     self._result = self.closure(*args, **kwargs)
+[rank2]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank2]:     return func(*args, **kwargs)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 140, in closure
+[rank2]:     self._backward_fn(step_output.closure_loss)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 241, in backward_fn
+[rank2]:     call._call_strategy_hook(self.trainer, "backward", loss, optimizer)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 329, in _call_strategy_hook
+[rank2]:     output = fn(*args, **kwargs)
+[rank2]:              ^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 213, in backward
+[rank2]:     self.precision_plugin.backward(closure_loss, self.lightning_module, optimizer, *args, **kwargs)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/precision.py", line 73, in backward
+[rank2]:     model.backward(tensor, *args, **kwargs)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 1135, in backward
+[rank2]:     loss.backward(*args, **kwargs)
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/_tensor.py", line 647, in backward
+[rank2]:     torch.autograd.backward(
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/autograd/__init__.py", line 354, in backward
+[rank2]:     _engine_run_backward(
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/autograd/graph.py", line 829, in _engine_run_backward
+[rank2]:     return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/data/_utils/signal_handling.py", line 73, in handler
+[rank2]:     _error_if_any_worker_fails()
+[rank2]: RuntimeError: DataLoader worker (pid 396406) is killed by signal: Terminated. 
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
+[rank0]:     cli = LightningCLI(
+[rank0]:           ^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
+[rank0]:     self._run_subcommand(self.subcommand)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
+[rank0]:     fn(**fn_kwargs)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
+[rank0]:     call._call_and_handle_interrupt(
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
+[rank0]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
+[rank0]:     return function(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
+[rank0]:     self._run(model, ckpt_path=ckpt_path)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
+[rank0]:     results = self._run_stage()
+[rank0]:               ^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1055, in _run_stage
+[rank0]:     self.fit_loop.run()
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 216, in run
+[rank0]:     self.advance()
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 458, in advance
+[rank0]:     self.epoch_loop.run(self._data_fetcher)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 152, in run
+[rank0]:     self.advance(data_fetcher)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 348, in advance
+[rank0]:     batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+[rank0]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 192, in run
+[rank0]:     self._optimizer_step(batch_idx, closure)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 270, in _optimizer_step
+[rank0]:     call._call_lightning_module_hook(
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 177, in _call_lightning_module_hook
+[rank0]:     output = fn(*args, **kwargs)
+[rank0]:              ^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 1366, in optimizer_step
+[rank0]:     optimizer.step(closure=optimizer_closure)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/optimizer.py", line 154, in step
+[rank0]:     step_output = self._strategy.optimizer_step(self._optimizer, closure, **kwargs)
+[rank0]:                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/ddp.py", line 273, in optimizer_step
+[rank0]:     optimizer_output = super().optimizer_step(optimizer, closure, model, **kwargs)
+[rank0]:                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 239, in optimizer_step
+[rank0]:     return self.precision_plugin.optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/amp.py", line 76, in optimizer_step
+[rank0]:     return super().optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/precision.py", line 123, in optimizer_step
+[rank0]:     return optimizer.step(closure=closure, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/optim/optimizer.py", line 516, in wrapper
+[rank0]:     out = func(*args, **kwargs)
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/optim/optimizer.py", line 81, in _use_grad
+[rank0]:     ret = func(*args, **kwargs)
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/optim/adam.py", line 226, in step
+[rank0]:     loss = closure()
+[rank0]:            ^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/precision.py", line 109, in _wrap_closure
+[rank0]:     closure_result = closure()
+[rank0]:                      ^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 146, in __call__
+[rank0]:     self._result = self.closure(*args, **kwargs)
+[rank0]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank0]:     return func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 140, in closure
+[rank0]:     self._backward_fn(step_output.closure_loss)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 241, in backward_fn
+[rank0]:     call._call_strategy_hook(self.trainer, "backward", loss, optimizer)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 329, in _call_strategy_hook
+[rank0]:     output = fn(*args, **kwargs)
+[rank0]:              ^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 213, in backward
+[rank0]:     self.precision_plugin.backward(closure_loss, self.lightning_module, optimizer, *args, **kwargs)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/precision.py", line 73, in backward
+[rank0]:     model.backward(tensor, *args, **kwargs)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 1135, in backward
+[rank0]:     loss.backward(*args, **kwargs)
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/_tensor.py", line 647, in backward
+[rank0]:     torch.autograd.backward(
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/autograd/__init__.py", line 354, in backward
+[rank0]:     _engine_run_backward(
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/autograd/graph.py", line 829, in _engine_run_backward
+[rank0]:     return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/data/_utils/signal_handling.py", line 73, in handler
+[rank0]:     _error_if_any_worker_fails()
+[rank0]: RuntimeError: DataLoader worker (pid 395267) is killed by signal: Terminated. 
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
+[rank1]:     main()
+[rank1]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
+[rank1]:     cli = LightningCLI(
+[rank1]:           ^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
+[rank1]:     self._run_subcommand(self.subcommand)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
+[rank1]:     fn(**fn_kwargs)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
+[rank1]:     call._call_and_handle_interrupt(
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
+[rank1]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
+[rank1]:     return function(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
+[rank1]:     self._run(model, ckpt_path=ckpt_path)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
+[rank1]:     results = self._run_stage()
+[rank1]:               ^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1055, in _run_stage
+[rank1]:     self.fit_loop.run()
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 216, in run
+[rank1]:     self.advance()
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/fit_loop.py", line 458, in advance
+[rank1]:     self.epoch_loop.run(self._data_fetcher)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 152, in run
+[rank1]:     self.advance(data_fetcher)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/training_epoch_loop.py", line 348, in advance
+[rank1]:     batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+[rank1]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 192, in run
+[rank1]:     self._optimizer_step(batch_idx, closure)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 270, in _optimizer_step
+[rank1]:     call._call_lightning_module_hook(
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 177, in _call_lightning_module_hook
+[rank1]:     output = fn(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 1366, in optimizer_step
+[rank1]:     optimizer.step(closure=optimizer_closure)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/optimizer.py", line 154, in step
+[rank1]:     step_output = self._strategy.optimizer_step(self._optimizer, closure, **kwargs)
+[rank1]:                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/ddp.py", line 273, in optimizer_step
+[rank1]:     optimizer_output = super().optimizer_step(optimizer, closure, model, **kwargs)
+[rank1]:                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 239, in optimizer_step
+[rank1]:     return self.precision_plugin.optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/amp.py", line 76, in optimizer_step
+[rank1]:     return super().optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/precision.py", line 123, in optimizer_step
+[rank1]:     return optimizer.step(closure=closure, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/optim/optimizer.py", line 516, in wrapper
+[rank1]:     out = func(*args, **kwargs)
+[rank1]:           ^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/optim/optimizer.py", line 81, in _use_grad
+[rank1]:     ret = func(*args, **kwargs)
+[rank1]:           ^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/optim/adam.py", line 226, in step
+[rank1]:     loss = closure()
+[rank1]:            ^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/precision.py", line 109, in _wrap_closure
+[rank1]:     closure_result = closure()
+[rank1]:                      ^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 146, in __call__
+[rank1]:     self._result = self.closure(*args, **kwargs)
+[rank1]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+[rank1]:     return func(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 140, in closure
+[rank1]:     self._backward_fn(step_output.closure_loss)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/optimization/automatic.py", line 241, in backward_fn
+[rank1]:     call._call_strategy_hook(self.trainer, "backward", loss, optimizer)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 329, in _call_strategy_hook
+[rank1]:     output = fn(*args, **kwargs)
+[rank1]:              ^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/strategy.py", line 213, in backward
+[rank1]:     self.precision_plugin.backward(closure_loss, self.lightning_module, optimizer, *args, **kwargs)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/plugins/precision/precision.py", line 73, in backward
+[rank1]:     model.backward(tensor, *args, **kwargs)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 1135, in backward
+[rank1]:     loss.backward(*args, **kwargs)
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/_tensor.py", line 647, in backward
+[rank1]:     torch.autograd.backward(
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/autograd/__init__.py", line 354, in backward
+[rank1]:     _engine_run_backward(
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/autograd/graph.py", line 829, in _engine_run_backward
+[rank1]:     return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/utils/data/_utils/signal_handling.py", line 73, in handler
+[rank1]:     _error_if_any_worker_fails()
+[rank1]: RuntimeError: DataLoader worker (pid 396423) is killed by signal: Terminated. 
+run.scwds.mamba.sh: line 30: 394654 Killed                  python run/train_scwds_mamba.py fit --seed_everything 42 --trainer.default_root_dir $SAVE_DIR --trainer.accelerator cuda --trainer.devices $DEVICES --trainer.strategy ddp --trainer.precision bf16-mixed --trainer.max_epochs 100 --trainer.log_every_n_steps 100 --trainer.accumulate_grad_batches 1 --trainer.gradient_clip_val 1.0 --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint --trainer.callbacks.monitor "val_score" --trainer.callbacks.mode "max" --trainer.callbacks.save_top_k -1 --trainer.callbacks.save_last true --trainer.callbacks.filename "{epoch:02d}-{val_score:.4f}" --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping --trainer.callbacks.monitor "val_score" --trainer.callbacks.mode "max" --trainer.callbacks.patience 20 --model.batch_size $BATCH_SIZE --model.in_shape "[31, 256, 256]" --model.obs_seq_len 10 --model.pred_seq_len 20 --model.hid_S 128 --model.hid_T 512 --model.N_S 4 --model.N_T 8 --model.mamba_d_state 32 --model.mamba_d_conv 4 --model.mamba_expand 2 --model.use_checkpoint true --model.warmup_epoch 20 --model.lr 5e-4 --model.min_lr 1e-6 --model.weight_focal 5 --model.weight_msssim 1 --model.weight_corr 0.5 --model.weight_dice 1.0 --model.focal_alpha 2.0 --model.focal_gamma 1.0 --model.false_alarm_penalty 5.0 --data.data_path $DATA_PATH --data.batch_size $BATCH_SIZE --data.num_workers 8
+ Operation Completed.
