@@ -63,49 +63,17 @@ class ModelConfig(BaseModel):
     # =========================================================
     # 5. 损失函数配置 (SOTA Loss Configuration)
     # =========================================================
-    # 针对长时空序列与稀疏数据设计的复合损失权重
-    
-    # [基础回归] 平衡均方误差 (Balanced MSE)
-    # 作用: 解决降水数据的长尾分布与稀疏性问题。
-    # 说明: 内部对强降水 (>30mm/h) 赋予高达 50 倍权重，防止模型通过预测全 0 偷懒。
     weight_bal_mse: float = 1.0
-    
-    # [频域感知] 傅里叶幅度损失 (FACL - Fourier Amplitude Loss)
-    # 作用: 解决长序列预测后期的“模糊效应”。
-    # 说明: 强制模型在频域恢复高频分量 (纹理细节)。建议值: 0.01 ~ 0.1。
     weight_facl: float = 0.05
-    
-    # [物理一致性] 梯度差分损失 (GDL - Gradient Difference Loss)
-    # 作用: 保持降水云团的边缘锐度 (空间梯度) 和运动连贯性 (时间梯度)。
-    # 说明: 防止雨团晕开或发生非物理的跳跃/闪烁。
     weight_gdl: float = 0.5
-    
-    # [业务指标] 软 CSI 评分损失 (Soft-CSI)
-    # 作用: 直接优化气象业务核心指标 (Critical Success Index)。
-    # 说明: 使用 Sigmoid 平滑近似不可微的 TS 评分。
     weight_csi: float = 0.5
-    
-    # [结构感知] 多尺度结构相似性 (MS-SSIM)
-    # 作用: 提升图像在人眼视觉上的结构保真度。
     weight_msssim: float = 0.5
-    
-    # [感知质量] LPIPS 感知损失 (可选)
-    # 作用: 利用预训练 VGG 网络提取特征距离，追求极致的视觉真实感。
-    # 注意: 计算开销较大，若显存吃紧建议设为 0.0。
     weight_lpips: float = 0.0
     
     # =========================================================
     # 6. 高级训练策略 (Advanced Strategy)
     # =========================================================
-    
-    # 课程学习 (Curriculum Learning)
-    # 策略: "先轮廓，后纹理"。
-    # 说明: 训练初期仅优化 MSE (学位置)，随着 Epoch 增加逐步提高 FACL/GDL 权重 (学细节)。
     use_curriculum_learning: bool = True 
-    
-    # 时间维度加权 (Temporal Reweighting)
-    # 策略: "远期加权"。
-    # 说明: 对长序列的后期帧 (e.g., T=20) 赋予更高权重，强迫模型不放弃长时效预测。
     use_temporal_weight: bool = True
     
     # --- Pydantic 配置 ---

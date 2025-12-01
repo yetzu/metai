@@ -69,14 +69,14 @@ case $MODE in
             --model.warmup_epoch 20 \
             --model.lr 5e-4 \
             --model.min_lr 1e-6 \
-            --model.weight_focal 1.0 \
-            --model.weight_msssim 1.0 \
-            --model.weight_corr 0.5 \
-            --model.weight_csi 1.0 \
-            --model.weight_evo 0.5 \
-            --model.focal_alpha 2.0 \
-            --model.focal_gamma 1.0 \
-            --model.false_alarm_penalty 5.0 \
+            --model.weight_bal_mse 1.0 \
+            --model.weight_facl 0.05 \
+            --model.weight_gdl 0.5 \
+            --model.weight_csi 0.5 \
+            --model.weight_msssim 0.5 \
+            --model.weight_lpips 0.0 \
+            --model.use_curriculum_learning true \
+            --model.use_temporal_weight true \
             --data.data_path $DATA_PATH \
             --data.batch_size $BATCH_SIZE \
             --data.num_workers 8
