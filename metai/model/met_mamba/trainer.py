@@ -10,10 +10,15 @@ from .metrices import MetScore
 from .config import ModelConfig
 
 class MeteoMambaModule(l.LightningModule):
+    """
+    MeteoMamba 训练模块
+    集成模型架构、混合损失函数、优化器配置及训练流程控制。
+    """
     def __init__(self, config: Optional[Union[ModelConfig, dict]] = None, **kwargs):
         super().__init__()
         
-        # 配置初始化
+        # 1. 配置初始化
+        # 支持传入 ModelConfig 对象或字典，优先使用传入参数覆盖默认配置
         if config is None:
             self.config = ModelConfig(**kwargs)
         elif isinstance(config, dict):
@@ -25,13 +30,13 @@ class MeteoMambaModule(l.LightningModule):
                 if hasattr(self.config, k):
                     setattr(self.config, k, v)
 
-        # 保存超参数
+        # 保存超参数 (用于 Checkpoint 恢复及日志记录)
         hparams = self.config.to_dict()
         for key in ['batch_size', 'data_path']:
             hparams.pop(key, None)
         self.save_hyperparameters(hparams)
         
-        # 初始化模型架构
+        # 2. 初始化模型架构 (STMamba)
         self.model = MeteoMamba(
             in_shape=self.config.in_shape,
             in_seq_len=self.config.obs_seq_len,
@@ -46,29 +51,29 @@ class MeteoMambaModule(l.LightningModule):
             use_checkpoint=self.config.use_checkpoint
         )
         
-        # 初始化混合损失函数
+        # 3. 初始化混合损失函数 (HybridLoss)
+        # 包含：平衡MSE、频域损失、梯度损失、软CSI指标及结构相似性
+        # 使用 getattr 确保配置兼容性
         self.criterion = HybridLoss(
-            weight_focal=self.config.weight_focal, 
-            weight_msssim=self.config.weight_msssim,
-            weight_corr=self.config.weight_corr,
-            weight_csi=self.config.weight_csi,  # 新增
-            weight_evo=self.config.weight_evo,  # 新增
-            intensity_weights=self.config.intensity_weights,
-            focal_alpha=self.config.focal_alpha,
-            focal_gamma=self.config.focal_gamma,
-            false_alarm_penalty=self.config.false_alarm_penalty,
-            corr_smooth_eps=self.config.corr_smooth_eps
+            weight_bal_mse=getattr(self.config, 'weight_bal_mse', 1.0),
+            weight_facl=getattr(self.config, 'weight_facl', 0.05),
+            weight_gdl=getattr(self.config, 'weight_gdl', 0.5),
+            weight_csi=getattr(self.config, 'weight_csi', 0.5),
+            weight_msssim=getattr(self.config, 'weight_msssim', 0.5),
+            weight_lpips=getattr(self.config, 'weight_lpips', 0.0),
+            use_curriculum=getattr(self.config, 'use_curriculum_learning', True),
+            use_temporal_weight=getattr(self.config, 'use_temporal_weight', True)
         )
         
-        # 验证集评估指标
+        # 验证集评估指标计算器
         self.valid_scorer = MetScore()
 
     def forward(self, x):
-        """标准推理入口，直接调用内部模型。"""
+        """标准推理入口"""
         return self.model(x)
 
     def configure_optimizers(self) -> Dict[str, Any]:
-        """配置优化器和学习率调度器。"""
+        """配置优化器与学习率调度器"""
         optimizer, scheduler, by_epoch = get_optim_scheduler(
             self.config, self.config.max_epochs, self.model
         )
@@ -81,83 +86,87 @@ class MeteoMambaModule(l.LightningModule):
         }
 
     def optimizer_zero_grad(self, epoch, batch_idx, optimizer):
-        """优化梯度置零策略，使用 set_to_none=True 提高性能。"""
+        """梯度置零优化"""
         optimizer.zero_grad(set_to_none=True)
 
     def lr_scheduler_step(self, scheduler: Any, metric: Any):
-        """自定义调度器步进逻辑，兼容 timm 调度器。"""
+        """调度器步进逻辑 (兼容 timm)"""
         if any(isinstance(scheduler, sch) for sch in timm_schedulers):
             scheduler.step(epoch=self.current_epoch)
         else:
             scheduler.step(metric) if metric is not None else scheduler.step()
 
     def on_train_epoch_start(self):
-        """
-        课程学习策略 (Curriculum Learning):
-        在训练初期动态调整 Loss 权重，从易到难。
-        """
-        if not self.config.use_curriculum_learning:
-            return
-
-        epoch = self.current_epoch
-        target_msssim = self.config.weight_msssim
-        target_corr = self.config.weight_corr
-        # [修改] 获取新的目标权重
-        target_csi = self.config.weight_csi
-        target_evo = self.config.weight_evo
-        
-        total_warmup = self.config.warmup_epoch
-        phase_1_end = int(total_warmup * 0.4) 
-        phase_2_end = total_warmup
-        
-        if epoch < phase_1_end:
-            alpha = 0.0
-        elif epoch < phase_2_end:
-            progress = (epoch - phase_1_end) / float(phase_2_end - phase_1_end)
-            alpha = progress
-        else:
-            alpha = 1.0
-            
-        if hasattr(self.criterion, 'weights'):
-            # 动态调整高级 Loss 的权重，Focal Loss 保持恒定作为基础
-            self.criterion.weights['msssim'] = target_msssim * alpha
-            self.criterion.weights['corr'] = target_corr * alpha
-            # [修改] 调整新 Loss
-            self.criterion.weights['csi'] = target_csi * alpha
-            self.criterion.weights['evo'] = target_evo * alpha
-
-        self.log_dict({
-            'curriculum/alpha': alpha,
-            'curriculum/phase': 1.0 if epoch < phase_1_end else (2.0 if epoch < phase_2_end else 3.0)
-        }, on_step=False, on_epoch=True, sync_dist=True)
+        """Epoch 开始时的钩子：记录训练进度"""
+        if self.config.use_curriculum_learning:
+            progress = self.current_epoch / float(self.config.max_epochs)
+            self.log('epoch_progress', progress, on_step=False, on_epoch=True, sync_dist=True)
 
     def training_step(self, batch, batch_idx):
         _, x, y, _, t_mask = batch
+        # 确保 mask 类型正确
         if t_mask.dtype != torch.float32: t_mask = t_mask.float()
         
         # ====================================================
-        # [时间维度课程学习] (Temporal Curriculum)
-        # 前 20% Epoch: 仅计算前 10 帧 (0-60min)，专注短临
-        # 之后: 计算全部 20 帧 (0-120min)，解锁长时效
+        # 线性课程学习机制 (Linear Curriculum Learning)
+        # ====================================================
+        # 策略:
+        # 1. 热身期 (0% ~ 10%): 固定训练 10 帧，稳固基础。
+        # 2. 增长期 (10% ~ 50%): 序列长度随 Epoch 线性从 10 增加到 20。
+        # 3. 稳定期 (50% ~ 100%): 训练全长 20 帧，攻克长时效。
         # ====================================================
         if self.config.use_curriculum_learning:
-            progress = self.current_epoch / float(self.config.max_epochs)
-            if progress < 0.2:
-                valid_len = 10
-                # t_mask shape: [B, T, C, H, W] (e.g., [4, 20, 1, 256, 256])
-                # 将 T > 10 的部分 mask 置 0
-                time_mask = torch.ones((1, y.shape[1], 1, 1, 1), device=self.device)
-                time_mask[:, valid_len:, :, :, :] = 0.0
+            total_epochs = float(self.config.max_epochs)
+            current_epoch = self.current_epoch
+            progress = current_epoch / total_epochs
+            
+            # 定义阶段参数
+            start_ratio = 0.1  # 热身结束点
+            end_ratio = 0.5    # 增长结束点
+            min_seq = 10       # 最小序列长度
+            max_seq = self.config.pred_seq_len # 最大序列长度 (通常为20)
+            
+            if progress < start_ratio:
+                # 阶段 1: 热身
+                valid_len = min_seq
+            elif progress < end_ratio:
+                # 阶段 2: 线性增长
+                # 归一化进度 (0.0 -> 1.0)
+                ramp_progress = (progress - start_ratio) / (end_ratio - start_ratio)
+                # 线性插值
+                valid_len = int(min_seq + (max_seq - min_seq) * ramp_progress)
+            else:
+                # 阶段 3: 全长
+                valid_len = max_seq
+            
+            # 边界保护
+            valid_len = max(1, min(valid_len, max_seq))
+            
+            # 应用 Mask (若当前 valid_len 小于数据长度，则遮蔽后续帧)
+            if t_mask.shape[1] > valid_len:
+                # 创建新 Mask 避免原地修改
+                time_mask = torch.ones_like(t_mask)
+                time_mask[:, valid_len:, ...] = 0.0
                 t_mask = t_mask * time_mask
+                
+                # 记录当前训练的序列长度，方便监控课程进度
+                self.log('curriculum/seq_len', float(valid_len), on_step=False, on_epoch=True)
 
+        # 模型前向传播 (约束输出范围 [0, 1])
         pred = torch.clamp(self.model(x), 0.0, 1.0)
         
-        loss, loss_dict = self.criterion(pred, y, mask=t_mask)
+        # 计算损失
+        # 传入当前 Epoch 信息，触发 Loss 内部的纹理渐进策略
+        loss, loss_dict = self.criterion(
+            pred, y, mask=t_mask,
+            current_epoch=self.current_epoch,
+            total_epochs=self.config.max_epochs
+        )
         
         bs = x.size(0)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
         
-        # 自动记录 loss_dict 中的所有分量 (包含 csi, evo 等)
+        # 记录各分量损失
         for k, v in loss_dict.items():
             if k != 'total':
                 self.log(f'loss_{k}', v, on_step=False, on_epoch=True, batch_size=bs, sync_dist=True)
@@ -170,7 +179,13 @@ class MeteoMambaModule(l.LightningModule):
         
         pred = torch.clamp(self.model(x), 0.0, 1.0)
         
-        loss, _ = self.criterion(pred, y, mask=t_mask)
+        # 验证阶段使用全量权重和全长序列进行评估，反映最终性能
+        loss, _ = self.criterion(
+            pred, y, mask=t_mask,
+            current_epoch=self.config.max_epochs, 
+            total_epochs=self.config.max_epochs
+        )
+        
         metric_results = self.valid_scorer(pred, y, mask=t_mask)
         
         bs = x.size(0)

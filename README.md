@@ -15,8 +15,8 @@ conda activate metai
 
 conda install gxx_linux-64 cuda-toolkit=12.1 -y
 conda install pandas matplotlib scipy opencv PyYAML seaborn pydantic cartopy rasterio -y
-pip install torch torchvision torchaudio
-pip install lightning lightning-utilities tensorboard timm pytorch-msssim
+pip install torch torchvision torchaudio tensorboard timm pytorch-msssim lpips
+pip install lightning lightning-utilities 
 
 mkdir mamba_build_temp
 cd mamba_build_temp
