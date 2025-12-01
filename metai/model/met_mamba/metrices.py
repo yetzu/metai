@@ -16,7 +16,7 @@ class MetScore(nn.Module):
         self.data_max = data_max
         
         # Log 反变换参数: log(30.0 + 1)
-        self.log_factor = math.log(30.0 + 1)
+        self.log_factor = math.log(self.data_max + 1)
         
         # --- 注册常量参数 (Buffer) ---
         
