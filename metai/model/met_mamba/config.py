@@ -47,7 +47,8 @@ class ModelConfig(BaseModel):
     weight_focal: float = 1.0
     weight_msssim: float = 1.0
     weight_corr: float = 0.5
-    weight_dice: float = 1.0
+    weight_csi: float = 1.0
+    weight_evo: float = 0.5
     
     # --- 损失细节参数 ---
     focal_alpha: float = 2.0

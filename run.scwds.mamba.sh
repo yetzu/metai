@@ -69,10 +69,11 @@ case $MODE in
             --model.warmup_epoch 20 \
             --model.lr 5e-4 \
             --model.min_lr 1e-6 \
-            --model.weight_focal 5 \
-            --model.weight_msssim 1 \
+            --model.weight_focal 1.0 \
+            --model.weight_msssim 1.0 \
             --model.weight_corr 0.5 \
-            --model.weight_dice 1.0 \
+            --model.weight_csi 1.0 \
+            --model.weight_evo 0.5 \
             --model.focal_alpha 2.0 \
             --model.focal_gamma 1.0 \
             --model.false_alarm_penalty 5.0 \

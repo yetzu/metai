@@ -51,7 +51,8 @@ class MeteoMambaModule(l.LightningModule):
             weight_focal=self.config.weight_focal, 
             weight_msssim=self.config.weight_msssim,
             weight_corr=self.config.weight_corr,
-            weight_dice=self.config.weight_dice,
+            weight_csi=self.config.weight_csi,  # 新增
+            weight_evo=self.config.weight_evo,  # 新增
             intensity_weights=self.config.intensity_weights,
             focal_alpha=self.config.focal_alpha,
             focal_gamma=self.config.focal_gamma,
@@ -92,7 +93,7 @@ class MeteoMambaModule(l.LightningModule):
 
     def on_train_epoch_start(self):
         """
-        课程学习策略 (Curriculum Learning)：
+        课程学习策略 (Curriculum Learning):
         在训练初期动态调整 Loss 权重，从易到难。
         """
         if not self.config.use_curriculum_learning:
@@ -100,8 +101,10 @@ class MeteoMambaModule(l.LightningModule):
 
         epoch = self.current_epoch
         target_msssim = self.config.weight_msssim
-        target_dice = self.config.weight_dice
         target_corr = self.config.weight_corr
+        # [修改] 获取新的目标权重
+        target_csi = self.config.weight_csi
+        target_evo = self.config.weight_evo
         
         total_warmup = self.config.warmup_epoch
         phase_1_end = int(total_warmup * 0.4) 
@@ -116,9 +119,12 @@ class MeteoMambaModule(l.LightningModule):
             alpha = 1.0
             
         if hasattr(self.criterion, 'weights'):
+            # 动态调整高级 Loss 的权重，Focal Loss 保持恒定作为基础
             self.criterion.weights['msssim'] = target_msssim * alpha
-            self.criterion.weights['dice'] = target_dice * alpha
             self.criterion.weights['corr'] = target_corr * alpha
+            # [修改] 调整新 Loss
+            self.criterion.weights['csi'] = target_csi * alpha
+            self.criterion.weights['evo'] = target_evo * alpha
 
         self.log_dict({
             'curriculum/alpha': alpha,
@@ -140,12 +146,8 @@ class MeteoMambaModule(l.LightningModule):
                 valid_len = 10
                 # t_mask shape: [B, T, C, H, W] (e.g., [4, 20, 1, 256, 256])
                 # 将 T > 10 的部分 mask 置 0
-                
-                # [关键修复] 构造 5D mask [1, T, 1, 1, 1] 以正确匹配维度
-                # 之前错误的 [1, T, 1, 1] 会导致广播错误生成 [B, T, T, H, W]
                 time_mask = torch.ones((1, y.shape[1], 1, 1, 1), device=self.device)
                 time_mask[:, valid_len:, :, :, :] = 0.0
-                
                 t_mask = t_mask * time_mask
 
         pred = torch.clamp(self.model(x), 0.0, 1.0)
@@ -155,6 +157,7 @@ class MeteoMambaModule(l.LightningModule):
         bs = x.size(0)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
         
+        # 自动记录 loss_dict 中的所有分量 (包含 csi, evo 等)
         for k, v in loss_dict.items():
             if k != 'total':
                 self.log(f'loss_{k}', v, on_step=False, on_epoch=True, batch_size=bs, sync_dist=True)
