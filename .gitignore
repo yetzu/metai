@@ -182,6 +182,7 @@ tmp/
 output/
 lightning_logs/
 bak/
+submit/
 
 *.log
 *log.txt
