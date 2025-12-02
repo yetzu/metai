@@ -43,7 +43,8 @@ case $MODE in
             --trainer.max_epochs 100 \
             --trainer.log_every_n_steps 100 \
             --trainer.accumulate_grad_batches 1 \
-            --trainer.gradient_clip_val 1.0 \
+            --trainer.gradient_clip_val 0.5 \
+            --trainer.gradient_clip_algorithm "norm" \
             --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
@@ -70,16 +71,17 @@ case $MODE in
             --model.lr 5e-4 \
             --model.min_lr 1e-6 \
             --model.weight_bal_mse 1.0 \
-            --model.weight_facl 0.05 \
-            --model.weight_gdl 0.5 \
+            --model.weight_facl 0.01 \
+            --model.weight_gdl 0.1 \
             --model.weight_csi 0.5 \
-            --model.weight_msssim 0.5 \
+            --model.weight_msssim 0.1 \
             --model.weight_lpips 0.0 \
             --model.use_curriculum_learning true \
             --model.use_temporal_weight true \
             --data.data_path $DATA_PATH \
             --data.batch_size $BATCH_SIZE \
-            --data.num_workers 8
+            --data.num_workers 8 \
+            --ckpt_path "/home/yyj/code/output/lightning_logs/version_0/checkpoints/epoch=17-val_score=0.0484.ckpt"
         ;;
         
     "test")

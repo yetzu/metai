@@ -67,16 +67,18 @@ class SpectralLoss(nn.Module):
 
 class GradientDifferenceLoss(nn.Module):
     """
-    [物理] 梯度差分损失 (GDL)
+    [物理] 梯度差分损失 (GDL) - 强度加权版
     说明: 约束空间梯度 (边缘锐度) 和时间梯度 (运动连续性)。
+    [修改] 引入强度加权：对强降水区域的梯度误差给予更高惩罚，避免强回波模糊。
     """
-    def __init__(self, alpha=1.0, temporal_weight=1.0):
+    def __init__(self, alpha=1.0, temporal_weight=1.0, weight_scale=5.0):
         super().__init__()
         self.alpha = alpha
         self.temporal_weight = temporal_weight
+        self.weight_scale = weight_scale # 强度加权系数 (控制对强降水的关注程度)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # --- 空间梯度 ---
+        # --- 1. 空间梯度 (Spatial Gradients) ---
         # 计算相邻像素差分 |I(x+1) - I(x)|
         p_dy = torch.abs(pred[..., 1:, :] - pred[..., :-1, :])
         p_dx = torch.abs(pred[..., :, 1:] - pred[..., :, :-1])
@@ -85,6 +87,14 @@ class GradientDifferenceLoss(nn.Module):
 
         diff_dy = torch.abs(p_dy - t_dy) ** self.alpha
         diff_dx = torch.abs(p_dx - t_dx) ** self.alpha
+
+        # [新增] 动态加权：基于 Target 强度对梯度误差加权
+        # 逻辑：强降水边缘的模糊(梯度丢失)需要被更重地惩罚
+        w_dy = 1.0 + self.weight_scale * target[..., 1:, :]
+        w_dx = 1.0 + self.weight_scale * target[..., :, 1:]
+        
+        diff_dy = diff_dy * w_dy
+        diff_dx = diff_dx * w_dx
 
         # 应用 Mask (空间)
         if mask is not None:
@@ -97,11 +107,16 @@ class GradientDifferenceLoss(nn.Module):
         else:
             loss_spatial = diff_dy.mean() + diff_dx.mean()
 
-        # --- 时间梯度 ---
+        # --- 2. 时间梯度 (Temporal Gradients) ---
+        loss_temp = torch.tensor(0.0, device=pred.device)
         if pred.shape[1] > 1:
             p_dt = torch.abs(pred[:, 1:] - pred[:, :-1])
             t_dt = torch.abs(target[:, 1:] - target[:, :-1])
             diff_dt = torch.abs(p_dt - t_dt) ** self.alpha
+            
+            # [新增] 时间梯度加权：重点关注强回波的移动/生消
+            w_dt = 1.0 + self.weight_scale * target[:, 1:]
+            diff_dt = diff_dt * w_dt
             
             # 应用 Mask (时间)
             if mask is not None:
@@ -109,8 +124,6 @@ class GradientDifferenceLoss(nn.Module):
                 loss_temp = (diff_dt * m_dt).sum() / (m_dt.sum() + 1e-8)
             else:
                 loss_temp = diff_dt.mean()
-        else:
-            loss_temp = torch.tensor(0.0, device=pred.device)
 
         return loss_spatial + self.temporal_weight * loss_temp
 
@@ -142,9 +155,9 @@ class BalancedMSELoss(nn.Module):
 
         # 动态权重生成
         weights = torch.ones_like(target)
-        weights[target >= self.log_thresh_light] = 5.0
-        weights[target >= self.log_thresh_mod] = 20.0
-        weights[target >= self.log_thresh_heavy] = 50.0  
+        weights[target >= self.log_thresh_light] = 1.0
+        weights[target >= self.log_thresh_mod] = 2.0
+        weights[target >= self.log_thresh_heavy] = 5.0  
 
         loss_map = diff * weights
         
@@ -218,11 +231,11 @@ class HybridLoss(nn.Module):
     """
     def __init__(self, 
                  weight_bal_mse: float = 1.0, 
-                 weight_facl: float = 0.05, 
-                 weight_gdl: float = 0.5, 
+                 weight_facl: float = 0.01,    # [优化] 默认值降低，防止初始冲击
+                 weight_gdl: float = 0.1,      # [优化] 默认值降低
                  weight_csi: float = 0.5, 
-                 weight_msssim: float = 0.5,
-                 weight_lpips: float = 0.1,
+                 weight_msssim: float = 0.1,   # [优化] 默认值降低
+                 weight_lpips: float = 0.0,    # 默认不开启 LPIPS (计算量大且易不稳定)
                  use_curriculum: bool = True,
                  use_temporal_weight: bool = True,
                  **kwargs):
@@ -243,12 +256,15 @@ class HybridLoss(nn.Module):
         # 初始化子模块
         self.loss_bal_mse = BalancedMSELoss(use_l1=True)
         self.loss_facl = SpectralLoss()
-        self.loss_gdl = GradientDifferenceLoss(temporal_weight=2.0)
+        # [修改] 使用强度加权版的 GDL
+        self.loss_gdl = GradientDifferenceLoss(temporal_weight=2.0, weight_scale=5.0)
         self.loss_csi = SoftCSILoss()
         
-        self.loss_msssim = MultiScaleStructuralSimilarityIndexMeasure(
-            data_range=1.0, kernel_size=11, reduction='elementwise_mean'
-        )
+        self.loss_msssim = None
+        if weight_msssim > 0:
+             self.loss_msssim = MultiScaleStructuralSimilarityIndexMeasure(
+                data_range=1.0, kernel_size=11, reduction='elementwise_mean'
+            )
             
         self.loss_lpips = None
         if weight_lpips > 0.0:
@@ -265,27 +281,29 @@ class HybridLoss(nn.Module):
         if mask is not None and mask.ndim == 5: mask = mask.squeeze(2)
         
         # 1. 课程学习权重计算
-        # 策略: 训练初期(前10%)仅关注MSE，之后线性增加纹理权重，直到70%时达到全量
+        # [关键修改] "错峰出行"策略：推迟纹理损失介入时间
+        # 0% ~ 30%: 仅 MSE + CSI (适应序列长度增长)
+        # 30% ~ 80%: 线性增加纹理权重
         texture_weight_factor = 1.0
         if self.use_curriculum and total_epochs > 0:
             safe_current = min(current_epoch, total_epochs)
             progress = safe_current / float(total_epochs)
-            if progress < 0.1:
+            
+            if progress < 0.3:
                 texture_weight_factor = 0.0 
-            elif progress < 0.7:
-                texture_weight_factor = (progress - 0.1) / 0.6
+            elif progress < 0.8:
+                texture_weight_factor = (progress - 0.3) / 0.5
             else:
                 texture_weight_factor = 1.0
 
         # 2. 时间维度加权
-        # 策略: 随时间步长增加权重，范围 [1.0, 1.5]
         extra_weights = None
         if self.use_temporal_weight:
             T = pred.shape[1]
             t_w = torch.linspace(1.0, 1.5, steps=T, device=pred.device).view(1, T, 1, 1)
             extra_weights = t_w
 
-        # 3. 计算各分量损失
+        # 3. 计算基础损失 (始终存在)
         l_mse = self.loss_bal_mse(pred, target, mask, extra_weights=extra_weights)
         l_csi = self.loss_csi(pred, target, mask)
         
@@ -294,9 +312,8 @@ class HybridLoss(nn.Module):
         l_msssim = torch.tensor(0.0, device=pred.device)
         l_lpips = torch.tensor(0.0, device=pred.device)
 
-        # 仅当纹理权重 > 0 时计算相关损失
+        # 4. 计算纹理/感知损失 (根据课程进度介入)
         if texture_weight_factor > 0:
-            # 传递 Mask
             l_facl = self.loss_facl(pred, target, mask) 
             l_gdl = self.loss_gdl(pred, target, mask)
             
@@ -308,19 +325,20 @@ class HybridLoss(nn.Module):
                 pred_masked = pred
                 target_masked = target
 
-            # SSIM
-            B, T, H, W = pred.shape
-            p_ssim = pred_masked.reshape(-1, 1, H, W)
-            t_ssim = target_masked.reshape(-1, 1, H, W)
-            l_msssim = 1.0 - self.loss_msssim(p_ssim, t_ssim)
+            if self.loss_msssim is not None:
+                # Reshape for SSIM [B*T, 1, H, W]
+                B, T, H, W = pred.shape
+                p_ssim = pred_masked.reshape(-1, 1, H, W)
+                t_ssim = target_masked.reshape(-1, 1, H, W)
+                l_msssim = 1.0 - self.loss_msssim(p_ssim, t_ssim)
             
-            # LPIPS (计算最后一帧的感知差异)
             if self.loss_lpips is not None:
+                # LPIPS 仅计算最后一帧 (通常是最难的)
                 p_rgb = pred_masked[:, -1:].repeat(1, 3, 1, 1) * 2 - 1 
                 t_rgb = target_masked[:, -1:].repeat(1, 3, 1, 1) * 2 - 1
                 l_lpips = self.loss_lpips(p_rgb, t_rgb).mean()
 
-        # 4. 加权求和
+        # 5. 加权求和
         w_facl = self.weights['facl'] * texture_weight_factor
         w_gdl = self.weights['gdl'] * texture_weight_factor
         w_msssim = self.weights['msssim'] * texture_weight_factor
@@ -334,8 +352,8 @@ class HybridLoss(nn.Module):
                  w_lpips * l_lpips)
         
         loss_dict = {
-            'total': total, 'bal_mse': l_mse, 'csi': l_csi, 'facl': l_facl, 
-            'gdl': l_gdl, 'msssim': l_msssim, 'lpips': l_lpips
+            'total': total, 'bal_mse': l_mse, 'csi': l_csi, 
+            'facl': l_facl, 'gdl': l_gdl, 'msssim': l_msssim, 'lpips': l_lpips
         }
         
         return total, loss_dict

@@ -56,10 +56,10 @@ class MeteoMambaModule(l.LightningModule):
         # 使用 getattr 确保配置兼容性
         self.criterion = HybridLoss(
             weight_bal_mse=getattr(self.config, 'weight_bal_mse', 1.0),
-            weight_facl=getattr(self.config, 'weight_facl', 0.05),
-            weight_gdl=getattr(self.config, 'weight_gdl', 0.5),
+            weight_facl=getattr(self.config, 'weight_facl', 0.01),
+            weight_gdl=getattr(self.config, 'weight_gdl', 0.1),
             weight_csi=getattr(self.config, 'weight_csi', 0.5),
-            weight_msssim=getattr(self.config, 'weight_msssim', 0.5),
+            weight_msssim=getattr(self.config, 'weight_msssim', 0.1),
             weight_lpips=getattr(self.config, 'weight_lpips', 0.0),
             use_curriculum=getattr(self.config, 'use_curriculum_learning', True),
             use_temporal_weight=getattr(self.config, 'use_temporal_weight', True)

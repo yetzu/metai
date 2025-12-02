@@ -24,7 +24,6 @@ from metai.utils import MetLabel
 # 常量配置
 # ==========================================
 THRESHOLDS = [0.1, 1.0, 2.0, 5.0, 8.0]
-# [修改] 统一阈值为 0.1，确保统计的非零占比与评分的 TS 覆盖范围一致
 MIN_VALID_RAIN_MM = 0.1 
 PHYSICAL_MAX = 30.0
 
@@ -86,7 +85,6 @@ def create_precipitation_cmap():
     区间: 0<r<0.1, 0.1<=r<1, 1<=r<2, 2<=r<5, 5<=r<8, r>=8
     r=0 用白色表示
     """
-    # 1. 定义6个区间的颜色 (从图片提取的Hex值)
     hex_colors = [
         '#9CF48D',  # 0 < r < 0.1 (浅绿)
         '#3CB73A',  # 0.1 <= r < 1 (中绿)
@@ -96,19 +94,11 @@ def create_precipitation_cmap():
         '#9F0000'   # r >= 8 (深红)
     ]
     
-    # 2. 创建离散色标
     cmap = mcolors.ListedColormap(hex_colors)
-    
-    # 3. 设置 r=0 (或无数据) 为白色
-    # 注意：需要配合 np.ma.masked_equal(data, 0) 使用
     cmap.set_bad('white') 
     cmap.set_under('white')
     
-    # 4. 定义区间 (Boundaries)
-    # 这里的 100 仅作为极大值，覆盖 >=8 的情况
     bounds = [0, 0.1, 1, 2, 5, 8, 100]
-    
-    # 5. 创建 Norm
     norm = mcolors.BoundaryNorm(boundaries=bounds, ncolors=len(hex_colors))
     
     return cmap, norm
@@ -116,57 +106,102 @@ def create_precipitation_cmap():
 def plot_seq_visualization(obs_seq, true_seq, pred_seq, out_path, vmax=30.0):
     """绘制序列对比图 (Obs, GT, Pred, Diff)"""
     T = true_seq.shape[0]
+    obs_len = obs_seq.shape[0] 
     cols = T
-    fig, axes = plt.subplots(4, cols, figsize=(cols * 1.5, 6.0), constrained_layout=True)
+    
+    # [修改] 增加 figsize 高度以容纳间隙，移除 constrained_layout
+    fig, axes = plt.subplots(4, cols, figsize=(cols * 1.5, 7.0))
     if T == 1: axes = axes[:, np.newaxis]
     
-    # [修改] 使用自定义降水色标
     precip_cmap, precip_norm = create_precipitation_cmap()
     
     for t in range(T):
-        # Row 0: Obs [T, C, H, W] -> need [H, W]
-        if t < obs_seq.shape[0]:
+        # Row 0: Obs
+        if t < obs_len:
             im = obs_seq[t]
             if im.ndim == 3: im = im[0]
-            
-            # [关键] 将 0 值掩码，使其显示为 set_bad 的颜色(白色)
-            # 因为 0 落在 [0, 0.1) 区间，如果不掩码会被映射为浅绿色
             im_masked = np.ma.masked_less_equal(im, 0)
             
             axes[0, t].imshow(im_masked, cmap=precip_cmap, norm=precip_norm, interpolation='nearest')
-            if t == 0: axes[0, t].set_ylabel('Obs (mm)', fontsize=8) 
+            if t == 0: axes[0, t].set_ylabel('Obs', fontsize=9, fontweight='bold') 
+            
+            # Label T-M
+            axes[0, t].set_title(f"T - {obs_len - 1 - t}", fontsize=8)
+
+            axes[0, t].set_xticks([])
+            axes[0, t].set_yticks([])
+            for spine in axes[0, t].spines.values():
+                spine.set_visible(True); spine.set_linewidth(0.5)
         else:
             axes[0, t].set_visible(False)
-        axes[0, t].axis('off')
         
-        # Row 1: GT [T, C, H, W]
+        # Row 1: GT
         im_gt = true_seq[t]
         if im_gt.ndim == 3: im_gt = im_gt[0]
         im_gt_masked = np.ma.masked_less_equal(im_gt, 0)
         
-        # axes[1, t].imshow(im_gt_masked, cmap=precip_cmap, norm=precip_norm, interpolation='nearest')
-        axes[1, t].imshow(im_gt_masked, cmap='bwr', interpolation='nearest')
-        axes[1, t].axis('off')
-        if t == 0: axes[1, t].set_ylabel('GT (mm)', fontsize=8)
+        axes[1, t].imshow(im_gt_masked, cmap=precip_cmap, norm=precip_norm, interpolation='nearest')
+        if t == 0: axes[1, t].set_ylabel('GT', fontsize=9, fontweight='bold')
+        
+        # Label T+N
+        axes[1, t].set_title(f"T + {t + 1}", fontsize=8)
+
+        axes[1, t].set_xticks([])
+        axes[1, t].set_yticks([])
+        for spine in axes[1, t].spines.values():
+            spine.set_visible(True); spine.set_linewidth(0.5)
         
         # Row 2: Pred
         im_pred = pred_seq[t]
         if im_pred.ndim == 3: im_pred = im_pred[0]
         im_pred_masked = np.ma.masked_less_equal(im_pred, 0)
         
-        # axes[2, t].imshow(im_pred_masked, cmap=precip_cmap, norm=precip_norm, interpolation='nearest')
-        axes[2, t].imshow(im_pred_masked, cmap='bwr', interpolation='nearest')
-        axes[2, t].axis('off')
-        if t == 0: axes[2, t].set_ylabel('Pred (mm)', fontsize=8)
+        axes[2, t].imshow(im_pred_masked, cmap=precip_cmap, norm=precip_norm, interpolation='nearest')
+        if t == 0: axes[2, t].set_ylabel('Pred', fontsize=9, fontweight='bold')
+        
+        axes[2, t].set_xticks([])
+        axes[2, t].set_yticks([])
+        for spine in axes[2, t].spines.values():
+            spine.set_visible(True); spine.set_linewidth(0.5)
         
         # Row 3: Diff
         gt_s = true_seq[t][0] if true_seq[t].ndim == 3 else true_seq[t]
         pd_s = pred_seq[t][0] if pred_seq[t].ndim == 3 else pred_seq[t]
         diff = gt_s - pd_s
         
-        axes[3, t].imshow(diff, cmap='bwr', vmin=-10.0, vmax=10.0)
-        axes[3, t].axis('off')
-        if t == 0: axes[3, t].set_ylabel('Diff', fontsize=8)
+        # [修改] Diff 范围 [-30, 30]
+        axes[3, t].imshow(diff, cmap='bwr', vmin=-30.0, vmax=30.0)
+        if t == 0: axes[3, t].set_ylabel('Diff', fontsize=9, fontweight='bold')
+
+        axes[3, t].set_xticks([])
+        axes[3, t].set_yticks([])
+        for spine in axes[3, t].spines.values():
+            spine.set_visible(True); spine.set_linewidth(0.5)
+
+    # [修改] 调整布局
+    # hspace=0.3 增加行间距，为 T+N 留出位置
+    fig.subplots_adjust(bottom=0.12, top=0.95, left=0.02, right=0.98, wspace=0.1, hspace=0.3)
+    
+    # --- Legend 1: Precipitation (左侧) ---
+    # [修改] 缩小尺寸：宽度 0.25, 高度 0.015
+    cbar_ax_precip = fig.add_axes([0.20, 0.05, 0.25, 0.015])
+    sm_precip = plt.cm.ScalarMappable(cmap=precip_cmap, norm=precip_norm)
+    sm_precip.set_array([])
+    cbar_p = fig.colorbar(sm_precip, cax=cbar_ax_precip, orientation='horizontal', spacing='uniform')
+    cbar_p.set_ticks([0.1, 1, 2, 5, 8])
+    cbar_p.set_ticklabels(['0.1', '1', '2', '5', '8'])
+    cbar_p.set_label('Precipitation (mm)', fontsize=8)
+    cbar_p.ax.tick_params(labelsize=7)
+    
+    # --- Legend 2: Diff (右侧) ---
+    # [新增] Diff 图例，范围 -30 到 30
+    cbar_ax_diff = fig.add_axes([0.55, 0.05, 0.25, 0.015])
+    sm_diff = plt.cm.ScalarMappable(cmap='bwr', norm=plt.Normalize(vmin=-30, vmax=30))
+    sm_diff.set_array([])
+    cbar_d = fig.colorbar(sm_diff, cax=cbar_ax_diff, orientation='horizontal')
+    cbar_d.set_ticks([-30, -15, 0, 15, 30])
+    cbar_d.set_label('Difference (mm)', fontsize=8)
+    cbar_d.ax.tick_params(labelsize=7)
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, dpi=100, bbox_inches='tight')
