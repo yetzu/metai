@@ -80,8 +80,7 @@ case $MODE in
             --model.use_temporal_weight true \
             --data.data_path $DATA_PATH \
             --data.batch_size $BATCH_SIZE \
-            --data.num_workers 8 \
-            --ckpt_path "/home/yyj/code/output/lightning_logs/version_0/checkpoints/epoch=17-val_score=0.0484.ckpt"
+            --data.num_workers 8
         ;;
         
     "test")

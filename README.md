@@ -28,6 +28,9 @@ python setup.py install
 pip install mamba-ssm
 
 ```
+python prework/step3_create_samples.py --vars RA CR VIL --interval 5 --length 20 --version v1
+
+
 
 nohup bash run.scwds.simvp.sh train > train_simvp_scwds.log 2>&1 &
 
