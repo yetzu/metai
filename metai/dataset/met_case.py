@@ -1,3 +1,4 @@
+
 import os
 from dataclasses import dataclass, field
 from typing import Optional, List
@@ -123,7 +124,7 @@ class MetCase:
                 return None
         return None
 
-    def get_valid_sequences(self, min_length: int = 40, max_interval_minutes: int = 10) -> List[List[str]]:
+    def get_valid_sequences(self, min_length: int = 30, max_interval_minutes: int = 10) -> List[List[str]]:
         """
         获取符合条件的序列。
         步骤：
@@ -141,7 +142,7 @@ class MetCase:
         valid_files = []
         
         # 使用 label_files 属性 (已排序)
-        label_dir = os.path.join(self.base_path, "LABEL", MetLabel.RA.name)
+        label_dir = os.path.join(self.base_path, MetLabel.RA.parent, MetLabel.RA.name)
         
         for filename in self.label_files:
             file_path = os.path.join(label_dir, filename)
@@ -336,8 +337,7 @@ class MetCase:
             List[List[str]]: 生成的样本列表
         """
         # 获取基础有效序列 
-        # 注意：保留原版逻辑，此处强制放宽 max_interval 到 20 分钟
-        valid_sequences = self.get_valid_sequences(min_length=sample_length, max_interval_minutes=20)
+        valid_sequences = self.get_valid_sequences(min_length=sample_length, max_interval_minutes=sample_interval)
 
         samples = []
         for sequence in valid_sequences:
@@ -352,7 +352,7 @@ class MetCase:
         
         return samples
     
-    def to_infer_sample(self, sample_length: int = 20) -> List[List[str]]:
+    def to_infer_sample(self, sample_length: int = 10) -> List[List[str]]:
         """
         获取用于推理的样本（通常取序列的最后一段）。
         
