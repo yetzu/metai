@@ -1,246 +1,237 @@
 # metai/model/met_mamba/trainer.py
 
-import lightning as l
 import torch
-from typing import Optional, Union, Any, Dict
-import math
+import torch.nn as nn
+from typing import Dict, Any, Tuple, Optional, List, Union
+from lightning.pytorch import LightningModule
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
-# [新增] 引入高斯模糊用于课程学习
-from torchvision.transforms.functional import gaussian_blur
+# 引入项目模块
+from metai.model.met_mamba.model import MeteoMamba
+from metai.model.met_mamba.loss import HybridLoss
+from metai.model.met_mamba.metrices import MetMetricCollection
+from metai.utils import MLOGI
 
-# 引入项目核心组件
-from metai.model.core import get_optim_scheduler, timm_schedulers
-from .model import MeteoMamba
-from .loss import HybridLoss
-from .metrices import MetScore
-from .config import ModelConfig
-
-class MeteoMambaModule(l.LightningModule):
+class MeteoMambaModule(LightningModule):
     """
-    MeteoMamba 训练与验证模块 (LightningModule)
+    [MeteoMamba Lightning Module]
     
-    核心特性：
-    1. 集成 STMamba 模型架构与混合损失函数。
-    2. 实现双重课程学习 (Dual Curriculum Learning)：
-       - 序列长度课程 (Sequence Length): 逐步增加预测时步，稳定自回归生成。
-       - 模糊度课程 (Blurring): 初期模糊 Target，迫使模型优先学习宏观平流 (Advection)，后期细化纹理。
-    3. 自动化的优化器与调度器配置。
+    功能职责：
+    1. 生命周期管理：负责模型的初始化、训练、验证、测试流程。
+    2. 数据流转：处理 Batch 数据解包，构建物理约束所需的上下文（如 prev_frame）。
+    3. 优化策略：配置 AdamW 优化器与 Cosine 退火调度器。
+    4. 稀疏控制：将 Trainer 的 current_epoch 状态注入模型，驱动稀疏率动态变化。
     """
     
-    def __init__(self, config: Optional[Union[ModelConfig, dict]] = None, **kwargs):
+    def __init__(
+        self, 
+        # --- 模型架构超参 (需与 MeteoMamba __init__ 对应) ---
+        in_shape: Tuple[int, int, int] = (19, 256, 256), # (C, H, W)
+        in_seq_len: int = 10,
+        out_seq_len: int = 20,
+        out_channels: int = 1,
+        hid_S: int = 64,
+        hid_T: int = 256,
+        N_S: int = 4,
+        N_T: int = 8,
+        mamba_sparse_ratio: float = 0.5, # 目标稀疏率
+        
+        # --- 优化器超参 ---
+        lr: float = 1e-3,
+        weight_decay: float = 1e-2,
+        max_epochs: int = 50,
+        
+        # --- Loss 配置 ---
+        use_temporal_weight: bool = True,
+        
+        # --- 其他 kwargs (用于兼容 CLI) ---
+        **kwargs
+    ):
         super().__init__()
+        # 保存超参到 self.hparams，便于 Checkpoint 恢复
+        self.save_hyperparameters()
         
-        # 1. 配置参数初始化
-        # 支持传入 Config 对象或字典，增强调用灵活性
-        if config is None:
-            self.config = ModelConfig(**kwargs)
-        elif isinstance(config, dict):
-            config.update(kwargs)
-            self.config = ModelConfig(**config)
-        else:
-            self.config = config
-            # 覆盖 kwargs 中的参数
-            for k, v in kwargs.items():
-                if hasattr(self.config, k):
-                    setattr(self.config, k, v)
-
-        # 保存超参数 (排除大数据路径，避免 Checkpoint 过大)
-        hparams = self.config.to_dict()
-        for key in ['batch_size', 'data_path']:
-            hparams.pop(key, None)
-        self.save_hyperparameters(hparams)
-        
-        # 2. 初始化模型架构
+        # 1. 初始化核心模型 (MeteoMamba)
         self.model = MeteoMamba(
-            in_shape=self.config.in_shape,
-            in_seq_len=self.config.obs_seq_len,
-            out_seq_len=self.config.pred_seq_len,
-            hid_S=self.config.hid_S,
-            hid_T=self.config.hid_T,
-            N_S=self.config.N_S,
-            N_T=self.config.N_T,
-            mamba_d_state=self.config.mamba_d_state,
-            mamba_d_conv=self.config.mamba_d_conv,
-            mamba_expand=self.config.mamba_expand,
-            use_checkpoint=self.config.use_checkpoint,
-            mamba_sparse_ratio=self.config.mamba_sparse_ratio # 传递稀疏率
+            in_shape=in_shape,
+            in_seq_len=in_seq_len,
+            out_seq_len=out_seq_len,
+            out_channels=out_channels,
+            hid_S=hid_S,
+            hid_T=hid_T,
+            N_S=N_S,
+            N_T=N_T,
+            mamba_sparse_ratio=mamba_sparse_ratio, # [稀疏化] 传入目标稀疏率
+            **kwargs
         )
         
-        # 3. 初始化混合损失函数
-        # HybridLoss 内部包含可学习参数，注册为子模块后会被自动优化
-        self.criterion = HybridLoss(
-            use_temporal_weight=getattr(self.config, 'use_temporal_weight', True)
+        # 2. 初始化损失函数 (Physics-Informed Hybrid Loss)
+        # 包含：MSE, CSI, Spectral, Conservation, Warp
+        self.criterion = HybridLoss(use_temporal_weight=use_temporal_weight)
+        
+        # 3. 初始化评估指标集合 (CSI, HSS, MAE 等)
+        # 分别用于训练、验证、测试阶段
+        self.train_metrics = MetMetricCollection(prefix="train_")
+        self.val_metrics = MetMetricCollection(prefix="val_")
+        self.test_metrics = MetMetricCollection(prefix="test_")
+
+    def forward(self, x: torch.Tensor, current_epoch: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        前向传播包装函数。
+        
+        Args:
+            x: 输入张量 [B, T_in, C, H, W]
+            current_epoch: 当前 Epoch 索引，用于控制模型内部的稀疏率退火。
+            
+        Returns:
+            y_hat: 降水预测 [B, T_out, C_out, H, W]
+            flows: 潜在空间流场 [B, T_out, 2, H, W] (用于 Warp Loss)
+        """
+        return self.model(x, current_epoch=current_epoch)
+
+    def _shared_step(self, batch, batch_idx, stage: str):
+        """
+        通用的 Step 逻辑 (Train/Val/Test 共用)。
+        负责数据解包、前向计算、构建物理约束上下文、计算 Loss 及指标。
+        """
+        # 1. 解包数据 (来自 DataLoader)
+        # meta: 元数据列表
+        # x: 历史观测 [B, T_in, C_in, H, W]
+        # y: 未来真值 [B, T_out, C_out, H, W]
+        # x_mask/y_mask: 有效性掩码 (Bool)
+        meta, x, y, x_mask, y_mask = batch
+        
+        # 2. 前向传播
+        # [关键] 传入 self.current_epoch 以驱动 STMambaBlock 中的稀疏率退火
+        # [关键] 获取 flows 用于后续的显式物理约束 (Warp Loss)
+        y_hat, flows = self(x, current_epoch=self.current_epoch)
+        
+        # 3. 构建物理约束所需的 '前一帧' (Previous Frame / Source Frame)
+        # Warp Loss 需要将 '前一帧' 根据 '流场' 推演到 '当前帧'。
+        # 对于预测序列的第一帧，其 '前一帧' 是输入序列 x 的最后一帧。
+        prev_frame = x[:, -1:].detach() # [B, 1, C_in, H, W]
+        
+        # 输入 x 可能包含多模态通道 (如 Radar, NWP, GIS)，通道数 C_in 可能 > C_out。
+        # 我们只提取与预测目标 (y) 对应的通道 (例如只取前 out_channels 个通道作为降水数据)。
+        if prev_frame.shape[2] > self.model.out_channels:
+            prev_frame = prev_frame[:, :, :self.model.out_channels, ...]
+            
+        # 4. 计算 Loss (包含 MSE, CSI, Spectral, Conservation, Warp)
+        loss, loss_dict = self.criterion(
+            pred=y_hat, 
+            target=y, 
+            flow=flows,        # [新增] 传入流场
+            prev_frame=prev_frame, # [新增] 传入推演源
+            mask=y_mask
         )
         
-        # 4. 初始化评估指标
-        self.valid_scorer = MetScore()
+        # 5. 计算并记录业务指标 (Metrics)
+        # 注意：Metrics 计算通常仅基于预测值和真实值，不涉及流场
+        if stage == 'train':
+            self.train_metrics(y_hat, y, y_mask)
+            # 训练阶段：记录详细的 Loss 分量，并在进度条显示
+            self.log_dict(loss_dict, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+            
+        elif stage == 'val':
+            self.val_metrics(y_hat, y, y_mask)
+            # 验证阶段：只记录 Total Loss，避免日志过于杂乱
+            self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+            
+        elif stage == 'test':
+            self.test_metrics(y_hat, y, y_mask)
+            self.log('test_loss', loss, on_step=False, on_epoch=True, logger=True)
+            
+        return loss
 
-    def forward(self, x):
-        """标准推理入口"""
-        # 确保输出在 [0, 1] 范围内 (物理约束)
-        return torch.clamp(self.model(x), 0.0, 1.0)
+    def training_step(self, batch, batch_idx):
+        return self._shared_step(batch, batch_idx, 'train')
 
-    def configure_optimizers(self) -> Dict[str, Any]:
+    def validation_step(self, batch, batch_idx):
+        return self._shared_step(batch, batch_idx, 'val')
+
+    def test_step(self, batch, batch_idx):
+        return self._shared_step(batch, batch_idx, 'test')
+    
+    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+        """
+        生产环境预测接口。
+        
+        [修正] 显式传入 max_epochs，强制模型处于'完全成熟'的稀疏状态，
+        确保推理速度最快，且与测试集表现一致。
+        """
+        # 解包逻辑需适配你的 Dataset collate_fn 返回值
+        # 假设 batch = (meta, x, y, x_mask, y_mask) 或 (meta, x, x_mask)
+        if len(batch) >= 2:
+            x = batch[1]
+        else:
+            x = batch[0]
+            
+        # 强制使用最终的稀疏率进行推理
+        y_hat, flows = self(x, current_epoch=self.hparams.max_epochs)
+        
+        return y_hat
+
+    def on_train_epoch_end(self):
+        """
+        每个 Training Epoch 结束时的回调。
+        1. 计算并记录全量 Train Metrics。
+        2. 重置 Metrics 状态。
+        3. (可选) 打印当前稀疏率，确认退火状态。
+        """
+        # 计算并记录指标
+        self.log_dict(self.train_metrics.compute(), prog_bar=False, logger=True)
+        self.train_metrics.reset()
+        
+        # 监控稀疏率退火状态 (从模型第一层获取示例)
+        # 这是一个很好的 Debug 信息，确认 Schedule 是否按预期工作
+        if hasattr(self.model.evolution.layers[0], '_get_curr_sparse_ratio'):
+            curr_ratio = self.model.evolution.layers[0]._get_curr_sparse_ratio(self.current_epoch)
+            MLOGI(f"Epoch {self.current_epoch} | Current Sparse Ratio: {curr_ratio:.2f}")
+        
+    def on_validation_epoch_end(self):
+        # 1. 计算所有累积指标
+        metrics = self.val_metrics.compute()
+        
+        # 2. [关键修复] 建立别名映射: val_total_score -> val_score
+        # 这确保了 ModelCheckpoint 和 EarlyStopping 能找到监控指标
+        if 'val_total_score' in metrics:
+            self.log('val_score', metrics['val_total_score'], prog_bar=True, logger=True, sync_dist=True)
+            
+        # 3. 记录其他所有详细指标 (如 val_csi, val_mae 等)
+        self.log_dict(metrics, prog_bar=False, logger=True, sync_dist=True)
+        
+        # 4. 重置累积器
+        self.val_metrics.reset()
+
+    def on_test_epoch_end(self):
+        self.log_dict(self.test_metrics.compute(), prog_bar=False, logger=True)
+        self.test_metrics.reset()
+
+    def configure_optimizers(self):
         """
         配置优化器与学习率调度器。
-        使用 metai.model.core 中的通用工具，支持 AdamW/SGD 等及 Cosine/Step 等调度策略。
+        标准配置：AdamW + CosineAnnealingLR。
         """
-        # 注意: self.parameters() 会自动包含 self.criterion.parameters() (即自动权重的 s 参数)
-        optimizer, scheduler, by_epoch = get_optim_scheduler(
-            self.config, self.config.max_epochs, self
+        # 1. 优化器
+        optimizer = AdamW(
+            self.parameters(), 
+            lr=self.hparams.lr, 
+            weight_decay=self.hparams.weight_decay
         )
+        
+        # 2. 调度器 (余弦退火)
+        scheduler = CosineAnnealingLR(
+            optimizer, 
+            T_max=self.hparams.max_epochs, 
+            eta_min=1e-6 # 最小学习率
+        )
+        
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "epoch" if by_epoch else "step"
-            }
+                "interval": "epoch", # 每个 Epoch 更新一次 LR
+                "frequency": 1,
+            },
         }
-
-    def optimizer_zero_grad(self, epoch, batch_idx, optimizer):
-        # set_to_none=True 通常比 zero_grad() 稍快
-        optimizer.zero_grad(set_to_none=True)
-
-    def lr_scheduler_step(self, scheduler: Any, metric: Any):
-        # 兼容 timm 的调度器接口与 Lightning 的接口
-        if any(isinstance(scheduler, sch) for sch in timm_schedulers):
-            scheduler.step(epoch=self.current_epoch)
-        else:
-            scheduler.step(metric) if metric is not None else scheduler.step()
-
-    def on_train_epoch_start(self):
-        """Epoch 开始时的钩子：记录课程学习进度"""
-        if self.config.use_curriculum_learning:
-            progress = self.current_epoch / float(self.config.max_epochs)
-            self.log('curriculum/progress', progress, on_step=False, on_epoch=True, sync_dist=True)
-
-    def training_step(self, batch, batch_idx):
-        """
-        单步训练逻辑。
-        包含：数据解包 -> 课程策略应用 -> 前向传播 -> Loss计算 -> 日志记录
-        """
-        _, x, y, _, t_mask = batch
-        # 确保 mask 类型正确
-        if t_mask.dtype != torch.float32: t_mask = t_mask.float()
-        
-        # ====================================================
-        # 课程学习策略 (Curriculum Learning Strategies)
-        # ====================================================
-        if self.config.use_curriculum_learning:
-            
-            # --- 策略 A: 序列长度课程 (Sequence Length Curriculum) ---
-            # 目的: 在训练初期仅回传短序列的 Loss，防止长序列累积误差导致梯度爆炸或模式崩溃。
-            total_epochs = float(self.config.max_epochs)
-            progress = self.current_epoch / total_epochs
-            
-            start_ratio = 0.2  # 0-20% Epochs: 保持最小长度
-            end_ratio = 0.7    # 70% Epochs: 达到最大长度
-            min_seq = 10       # 起始预测长度
-            max_seq = self.config.pred_seq_len
-            
-            if progress < start_ratio:
-                valid_len = min_seq
-            elif progress < end_ratio:
-                # 线性增长阶段
-                ramp_progress = (progress - start_ratio) / (end_ratio - start_ratio)
-                valid_len = int(min_seq + (max_seq - min_seq) * ramp_progress)
-            else:
-                valid_len = max_seq
-            
-            valid_len = max(1, min(valid_len, max_seq))
-            
-            # 如果当前 Mask 长度超过课程长度，则截断 Mask (不计算后续时步的 Loss)
-            if t_mask.shape[1] > valid_len:
-                # 创建新 Mask 避免原地修改影响 Dataset
-                time_mask_curriculum = torch.ones_like(t_mask)
-                time_mask_curriculum[:, valid_len:, ...] = 0.0
-                t_mask = t_mask * time_mask_curriculum
-                
-            self.log('curriculum/seq_len', float(valid_len), on_step=False, on_epoch=True)
-
-            # --- 策略 B: 模糊度课程 (Blurring Curriculum) [新增] ---
-            # 目的: 训练初期降低 Target 的高频信息，引导模型优先拟合大尺度的流体运动 (Advection)。
-            # 随着训练进行，逐渐减小模糊半径，让模型学习微观纹理。
-            max_sigma = 2.0  # 初始最大高斯核半径
-            blur_epochs = 20 # 在前 20 个 Epoch 内应用模糊策略
-            
-            if self.current_epoch < blur_epochs:
-                # 线性衰减 sigma: max_sigma -> 0.0
-                sigma = max_sigma * (1 - self.current_epoch / blur_epochs)
-                
-                # 仅当 sigma 足够大时执行模糊，节省计算资源
-                if sigma > 0.1:
-                    # 计算 Kernel Size: 必须为奇数，通常取 6*sigma + 1 覆盖绝大部分能量
-                    k_size = int(2 * int(3 * sigma) + 1)
-                    if k_size % 2 == 0: k_size += 1
-                    
-                    # 对 Ground Truth (y) 应用高斯模糊
-                    y = gaussian_blur(y, kernel_size=k_size, sigma=sigma)
-                    
-                    self.log('curriculum/blur_sigma', sigma, on_step=False, on_epoch=True)
-
-        # ====================================================
-        # 前向与反向传播
-        # ====================================================
-        
-        # 1. 前向传播
-        pred = self(x) # 内部已包含 clamp(0,1)
-        
-        # 2. 计算损失
-        # 传入 current_epoch 供 Loss 内部可能的动态调整使用
-        loss, loss_dict = self.criterion(
-            pred, y, mask=t_mask,
-            current_epoch=self.current_epoch,
-            total_epochs=self.config.max_epochs
-        )
-        
-        # 3. 日志记录
-        bs = x.size(0)
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
-        
-        # 记录详细分项 Loss 和学习到的权重
-        for k, v in loss_dict.items():
-            if k != 'total':
-                self.log(f'loss_metrics/{k}', v, on_step=False, on_epoch=True, batch_size=bs, sync_dist=True)
-                
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        """
-        验证逻辑。
-        注意：验证阶段不应用任何课程学习策略（无 Blur，无 Mask 截断），
-        必须使用最原始、最完整的 Ground Truth 评估模型真实性能。
-        """
-        _, x, y, _, t_mask = batch
-        if t_mask.dtype != torch.float32: t_mask = t_mask.float()
-        
-        pred = self(x)
-        
-        # 计算验证 Loss
-        loss, _ = self.criterion(
-            pred, y, mask=t_mask,
-            current_epoch=self.config.max_epochs, 
-            total_epochs=self.config.max_epochs
-        )
-        
-        # 计算气象评估指标 (CSI, HSS, etc.)
-        metric_results = self.valid_scorer(pred, y, mask=t_mask)
-        
-        bs = x.size(0)
-        self.log('val_loss', loss, on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
-        self.log('val_score', metric_results['total_score'], on_epoch=True, prog_bar=True, batch_size=bs, sync_dist=True)
-        
-        # (可选) 记录具体的 CSI 指标，便于分析不同阈值的表现
-        if 'csi_30' in metric_results: # 假设 metrics 返回了 key 为 csi_30 的指标
-             self.log('val_csi_30', metric_results['csi_30'], on_epoch=True, batch_size=bs, sync_dist=True)
-
-    def test_step(self, batch, batch_idx):
-        """测试逻辑：仅返回预测结果供后续可视化或评估"""
-        _, x, y, _, t_mask = batch
-        pred = self(x)
-        return {'inputs': x, 'trues': y, 'preds': pred}
-
-    def predict_step(self, batch, batch_idx, dataloader_idx=0):
-        """生产环境预测接口"""
-        _, x, _ = batch
-        return self(x)

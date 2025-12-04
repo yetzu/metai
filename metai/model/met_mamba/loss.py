@@ -11,7 +11,7 @@ from typing import Optional, Dict, Tuple
 # ==============================================================================
 
 # 物理参数：必须与 Dataset 的归一化逻辑严格一致
-# 假设最大降水为 30mm/h，用于对数归一化反算
+# 假设最大降水为 30mm/h (对于极端强对流，建议在 Dataset 中调整此值，如 100mm/h)
 MM_MAX = 30.0  
 LOG_NORM_FACTOR = math.log(MM_MAX + 1)
 
@@ -152,53 +152,94 @@ class SpectralLoss(nn.Module):
 
 class PhysicsConstraintsLoss(nn.Module):
     """
-    [物理约束 Loss - 非对称改进版]
+    [物理约束 Loss - 增强版]
     
     包含两个子约束：
     1. 非对称局部质量守恒 (Asymmetric Local Conservation): 
        防止模型通过降低总降水量来规避风险。
        对于“漏报爆发”（Under-prediction）给予比“虚报”更重的惩罚。
-    2. 光流一致性 (Optical Flow/Consistency): 
-       约束运动的平滑性，符合流体动力学特性。
+    2. 显式平流一致性 (Warp Loss): 
+       利用模型预测的流场对前一帧进行 Warp，强制流场符合物理运动规律。
     """
     def __init__(self, pool_size=4, under_penalty=2.0):
         super().__init__()
         self.pool_size = pool_size
         self.under_penalty = under_penalty # 漏报惩罚系数
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, 
+                flow: Optional[torch.Tensor] = None, 
+                prev_frame: Optional[torch.Tensor] = None,
+                mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        
         # --- 1. 局部质量守恒约束 (非对称版) ---
         if mask is not None:
-            pred = pred * mask
-            target = target * mask
+            pred_masked = pred * mask
+            target_masked = target * mask
+        else:
+            pred_masked = pred
+            target_masked = target
             
         # Reshape for pooling: [B, T, H, W] -> [B*T, 1, H, W]
         b, t, h, w = pred.shape
-        p_reshaped = pred.view(b * t, 1, h, w)
-        t_reshaped = target.view(b * t, 1, h, w)
+        p_reshaped = pred_masked.view(b * t, 1, h, w)
+        t_reshaped = target_masked.view(b * t, 1, h, w)
         
         # 计算局部平均 (Local Average)，模拟降水通量
         p_local = F.avg_pool2d(p_reshaped, kernel_size=self.pool_size, stride=self.pool_size)
         t_local = F.avg_pool2d(t_reshaped, kernel_size=self.pool_size, stride=self.pool_size)
         
         # 计算差异: 预测 - 真实
+        # diff < 0 意味着漏报 (预测值 < 真实值)，施加更重惩罚
         diff = p_local - t_local
-        
-        # [核心改进] 非对称权重逻辑
-        # 当 diff < 0 (预测 < 真实，即漏报了强度/增长) 时，施加额外惩罚 (under_penalty)。
-        # 这迫使模型在面对不确定性时，倾向于保留更强的回波（Better safe than sorry），
-        # 而非保守地平滑掉，从而缓解"初生对流被忽略"的问题。
         weight_map = torch.where(diff < 0, self.under_penalty, 1.0)
         
         loss_cons = (torch.abs(diff) * weight_map).mean()
         
-        # --- 2. 变化率/光流一致性约束 ---
-        # 约束时间差分的一致性，减少闪烁
-        p_diff = pred[:, 1:] - pred[:, :-1]
-        t_diff = target[:, 1:] - target[:, :-1]
-        loss_flow = F.l1_loss(p_diff, t_diff)
+        # --- 2. 显式 Warp Loss ---
+        # 如果提供了流场和前一帧，计算：| I_{t+1} - Warp(I_t, Flow) |
+        loss_warp = torch.tensor(0.0, device=pred.device)
         
-        return loss_cons, loss_flow
+        if flow is not None and prev_frame is not None:
+            # 构造推演源序列 (Source Images)
+            # T0_src = prev_frame (观测最后一帧) -> 预测 T0_tgt (target 第一帧)
+            # T1_src = target[0] -> 预测 T1_tgt (target 第二帧) (类似 Teacher Forcing)
+            src_imgs = torch.cat([prev_frame, target[:, :-1]], dim=1) # [B, T, C, H, W]
+            tgt_imgs = target # [B, T, C, H, W]
+            
+            B, T, C, H, W = tgt_imgs.shape
+            
+            # 1. 上采样流场: Flow 是在 Latent 空间计算的，通常分辨率较低
+            # flow shape: [B, T, 2, H_lat, W_lat]
+            flow_up = F.interpolate(
+                flow.view(B*T, 2, flow.shape[-2], flow.shape[-1]), 
+                size=(H, W), mode='bilinear', align_corners=False
+            ) # -> [B*T, 2, H, W]
+            
+            # 2. 构建采样 Grid
+            yy, xx = torch.meshgrid(
+                torch.linspace(-1, 1, H, device=flow.device),
+                torch.linspace(-1, 1, W, device=flow.device),
+                indexing='ij'
+            )
+            base_grid = torch.stack([xx, yy], dim=-1).unsqueeze(0).expand(B*T, -1, -1, -1) # [B*T, H, W, 2]
+            
+            # 3. 叠加流场 (注意 permute 顺序)
+            # flow_up 是 delta (dx, dy)
+            sampling_grid = base_grid + flow_up.permute(0, 2, 3, 1)
+            
+            # 4. 执行 Warping
+            src_flat = src_imgs.reshape(B*T, C, H, W)
+            # 使用 reflection padding 缓解边界消失问题，与模型推理时一致
+            warped_flat = F.grid_sample(src_flat, sampling_grid, mode='bilinear', padding_mode='reflection', align_corners=False)
+            warped = warped_flat.view(B, T, C, H, W)
+            
+            # 5. 计算 L1 Loss
+            if mask is not None:
+                loss_warp = F.l1_loss(warped * mask, tgt_imgs * mask)
+            else:
+                loss_warp = F.l1_loss(warped, tgt_imgs)
+        
+        return loss_cons, loss_warp
 
 # ==============================================================================
 # 智能混合 Loss (Automatic Weighted Hybrid Loss)
@@ -224,20 +265,24 @@ class HybridLoss(nn.Module):
         self.loss_mse = BalancedMSELoss()
         self.loss_csi = CSILoss()
         self.loss_spectral = SpectralLoss()
-        # [修改] 启用非对称物理约束，惩罚系数设为 2.0
+        # [修改] 启用非对称物理约束 + Warp Loss
         self.loss_physics = PhysicsConstraintsLoss(under_penalty=2.0)
         
         # 2. 定义可学习参数 (Learnable Weights)
         # s 代表 log(variance)。初始化为 0 意味着初始方差为 1，初始权重为 0.5。
-        # 形状为 5，分别对应: [MSE, CSI, Spectral, Conservation, Flow]
+        # 形状为 5，分别对应: [MSE, CSI, Spectral, Conservation, Warp]
         self.params = nn.Parameter(torch.zeros(5)) 
         
-    def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None, 
-                current_epoch: int = 100, total_epochs: int = 100) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, 
+                flow: Optional[torch.Tensor] = None, 
+                prev_frame: Optional[torch.Tensor] = None,
+                mask: Optional[torch.Tensor] = None, 
+                **kwargs) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         
         # 维度兼容性处理
         if pred.ndim == 5: pred = pred.squeeze(2)
         if target.ndim == 5: target = target.squeeze(2)
+        if prev_frame is not None and prev_frame.ndim == 5: prev_frame = prev_frame.squeeze(2)
         if mask is not None and mask.ndim == 5: mask = mask.squeeze(2)
 
         # 1. 准备时间权重 (仅增强 MSE)
@@ -251,14 +296,18 @@ class HybridLoss(nn.Module):
         l_mse = self.loss_mse(pred, target, mask, extra_weights)
         l_csi = self.loss_csi(pred, target, mask)
         l_spec = self.loss_spectral(pred, target, mask)
-        l_cons, l_flow = self.loss_physics(pred, target, mask)
+        
+        # [修改] 传入 flow 和 prev_frame，同时获取 Cons Loss 和 Warp Loss
+        l_cons, l_warp = self.loss_physics(pred, target, flow, prev_frame, mask)
         
         # 将所有 Loss 堆叠: [5]
-        losses = torch.stack([l_mse, l_csi, l_spec, l_cons, l_flow])
+        losses = torch.stack([l_mse, l_csi, l_spec, l_cons, l_warp])
         
         # 3. 自动加权计算 (Automatic Weighting)
         # s: 可学习的不确定性参数
-        s = self.params
+        # [增强] 增加 Clamp 防止数值爆炸 (s过大导致exp(-s)过小尚可，但s过小导致exp(-s)爆炸很危险)
+        s = self.params.clamp(min=-10.0, max=10.0)
+        
         # precision: 相当于权重 (1 / sigma^2)
         precision = torch.exp(-s)
         
@@ -275,14 +324,14 @@ class HybridLoss(nn.Module):
             'csi_raw': l_csi.detach(),
             'spec_raw': l_spec.detach(),
             'cons_raw': l_cons.detach(),
-            'flow_raw': l_flow.detach(),
+            'warp_raw': l_warp.detach(), # [新增] 监控平流误差
             # --- 学习到的实际权重 (0.5 * exp(-s)) ---
             # 观察这些值的变化可以看出模型当前关注哪些任务
             'w_mse': 0.5 * precision[0].detach(),
             'w_csi': 0.5 * precision[1].detach(),
             'w_spec': 0.5 * precision[2].detach(),
             'w_cons': 0.5 * precision[3].detach(),
-            'w_flow': 0.5 * precision[4].detach(),
+            'w_warp': 0.5 * precision[4].detach(), # [新增] Warp 权重
             # --- 不确定性参数 s ---
             's_mse': s[0].detach(),
             's_csi': s[1].detach()

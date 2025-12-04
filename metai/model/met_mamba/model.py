@@ -139,12 +139,12 @@ class EvolutionNet(nn.Module):
                 drop=drop, 
                 drop_path=dpr[i], 
                 use_checkpoint=use_checkpoint,
-                sparse_ratio=sparse_ratio, # [传递稀疏率]
+                sparse_ratio=sparse_ratio, # [传递目标稀疏率]
                 **mamba_kwargs
             ) for i in range(num_layers)
         ])
 
-    def forward(self, x):
+    def forward(self, x, current_epoch=0): # [修改] 接收 epoch 参数
         # 输入 x: [B, T, C, H, W]
         B, T, C, H, W = x.shape
         
@@ -183,7 +183,8 @@ class EvolutionNet(nn.Module):
         
         # 通过 Mamba 层进行演变
         for layer in self.layers:
-            x = layer(x)
+            # [修改] 将 current_epoch 传递给 Block 用于稀疏率退火
+            x = layer(x, current_epoch=current_epoch)
             
         # 输出投影
         x = x.permute(0, 1, 3, 4, 2).contiguous()
@@ -260,7 +261,7 @@ class MeteoMamba(nn.Module):
         
         # 注：AdvectiveProjection 内部已处理初始化，无需额外的 _init_time_proj
 
-    def forward(self, x_raw):
+    def forward(self, x_raw, current_epoch=0): # [修改] 接收 epoch
         # x_raw 输入形状: [B, T_in, C_in, H, W]
         B, T_in, C_in, H, W = x_raw.shape
         
@@ -274,13 +275,13 @@ class MeteoMamba(nn.Module):
         # 恢复时间维度，通过 Mamba 建模时空演变
         # z: [B, T_in, C_hid, H_, W_]
         z = embed.view(B, T_in, C_hid, H_, W_)
-        z = self.evolution(z)
+        # [修改] 传递 current_epoch
+        z = self.evolution(z, current_epoch=current_epoch)
         
         # 3. 时间投影阶段 (Time Projection)
         # 使用 AdvectiveProjection 进行非线性动态流引导的特征变换
-        # 输入: [B, T_in, C_hid, H_, W_]
-        # 输出: [B, T_out, C_hid, H_, W_]
-        z = self.latent_time_proj(z) 
+        # [修改] 接收返回的 flows 用于 Physics Loss
+        z, flows = self.latent_time_proj(z) 
         
         # 重塑为 Decoder 需要的格式: [B*T_out, C_hid, H_, W_]
         z = z.view(B * self.T_out, C_hid, H_, W_)
@@ -302,4 +303,5 @@ class MeteoMamba(nn.Module):
         last_frame = x_raw[:, -1:, :self.out_channels, :, :].detach() 
         Y = last_frame + Y_diff
         
-        return Y
+        # [修改] 返回 Y 和 flows
+        return Y, flows
