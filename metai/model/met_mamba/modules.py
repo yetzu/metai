@@ -420,25 +420,33 @@ class STMambaBlock(nn.Module):
 
 class FlowPredictorGRU(nn.Module):
     """
-    [动态流场预测器 - GRU版]
-    利用 ConvGRU 单元动态预测流场增量，并维护隐藏状态。
+    [动态流场与生消预测器 - ConvGRU]
+    改进版：不仅预测流场 (Advection)，还预测残差 (Residual/Growth-Decay)。
     """
     def __init__(self, in_channels, hidden_dim):
         super().__init__()
+        # ConvGRU 核心门控单元
         self.conv_z = nn.Conv2d(in_channels + hidden_dim, hidden_dim, 3, 1, 1)
         self.conv_r = nn.Conv2d(in_channels + hidden_dim, hidden_dim, 3, 1, 1)
         self.conv_h = nn.Conv2d(in_channels + hidden_dim, hidden_dim, 3, 1, 1)
         
-        # 流场输出头: 预测流场 [dx, dy]
+        # 输出头 1: 流场预测 [Batch, 2, H, W]
         self.flow_head = nn.Conv2d(hidden_dim, 2, 3, 1, 1)
-        # 初始化为0，保证初始状态平稳
+        
+        # [新增] 输出头 2: 残差更新 [Batch, C, H, W]
+        # 用于模拟云团的 生长、消散、合并、分裂 等非平流过程
+        self.residual_head = nn.Conv2d(hidden_dim, in_channels, 3, 1, 1)
+
+        # 初始化为0，保证初始状态平稳，让模型先学会平流，再学会生消
         nn.init.constant_(self.flow_head.weight, 0)
         nn.init.constant_(self.flow_head.bias, 0)
+        nn.init.constant_(self.residual_head.weight, 0)
+        nn.init.constant_(self.residual_head.bias, 0)
 
     def forward(self, x, h):
         """
-        x: 当前 Warp 后的特征 [B, C, H, W]
-        h: 上一时刻的隐状态 [B, C_hid, H, W]
+        x: 当前时刻特征 [B, C, H, W]
+        h: 上一时刻隐状态 [B, C_hid, H, W]
         """
         combined = torch.cat([x, h], dim=1)
         z = torch.sigmoid(self.conv_z(combined))
@@ -448,20 +456,74 @@ class FlowPredictorGRU(nn.Module):
         h_tilde = torch.tanh(self.conv_h(combined_new))
         
         h_next = (1 - z) * h + z * h_tilde
-        delta_flow = self.flow_head(h_next)
         
-        return delta_flow, h_next
+        # 同时输出流场和残差
+        delta_flow = self.flow_head(h_next)
+        residual = self.residual_head(h_next)
+        
+        return delta_flow, residual, h_next
+
+# [文件片段] metai/model/met_mamba/modules.py
+
+class FlowPredictorGRU(nn.Module):
+    """
+    [动态流场与生消预测器]
+    改进版：不仅预测流场 (Advection)，还预测残差 (Residual/Growth-Decay)。
+    """
+    def __init__(self, in_channels, hidden_dim):
+        super().__init__()
+        # ConvGRU 核心门控单元
+        self.conv_z = nn.Conv2d(in_channels + hidden_dim, hidden_dim, 3, 1, 1)
+        self.conv_r = nn.Conv2d(in_channels + hidden_dim, hidden_dim, 3, 1, 1)
+        self.conv_h = nn.Conv2d(in_channels + hidden_dim, hidden_dim, 3, 1, 1)
+        
+        # 输出头 1: 流场预测 [Batch, 2, H, W]
+        self.flow_head = nn.Conv2d(hidden_dim, 2, 3, 1, 1)
+        
+        # [新增] 输出头 2: 残差更新 [Batch, C, H, W]
+        # 用于模拟云团的 生长、消散、合并、分裂 等非平流过程
+        self.residual_head = nn.Conv2d(hidden_dim, in_channels, 3, 1, 1)
+
+        # 初始化为0，保证初始状态平稳，让模型先学会平流，再学会生消
+        nn.init.constant_(self.flow_head.weight, 0)
+        nn.init.constant_(self.flow_head.bias, 0)
+        nn.init.constant_(self.residual_head.weight, 0)
+        nn.init.constant_(self.residual_head.bias, 0)
+
+    def forward(self, x, h):
+        """
+        x: 当前时刻特征 [B, C, H, W]
+        h: 上一时刻隐状态 [B, C_hid, H, W]
+        """
+        combined = torch.cat([x, h], dim=1)
+        z = torch.sigmoid(self.conv_z(combined))
+        r = torch.sigmoid(self.conv_r(combined))
+        
+        combined_new = torch.cat([x, r * h], dim=1)
+        h_tilde = torch.tanh(self.conv_h(combined_new))
+        
+        h_next = (1 - z) * h + z * h_tilde
+        
+        # 同时输出流场和残差
+        delta_flow = self.flow_head(h_next)
+        residual = self.residual_head(h_next)
+        
+        return delta_flow, residual, h_next
+
 
 class AdvectiveProjection(nn.Module):
     """
     [显式平流投影层]
-    利用物理约束 (流场) 对特征进行时间推进。
+    利用 Advection + Residual 机制对特征进行时间推进。
+    
+    公式: Z_{t+1} = Warp(Z_t, Flow_t) + Residual_t
     """
     def __init__(self, dim, t_in, t_out):
         super().__init__()
         self.t_in = t_in
         self.t_out = t_out
         self.dim = dim
+        # 使用改进后的预测器
         self.flow_predictor = FlowPredictorGRU(in_channels=dim, hidden_dim=dim)
         self.init_h = nn.Conv2d(dim, dim, 1)
 
@@ -470,6 +532,7 @@ class AdvectiveProjection(nn.Module):
         curr_z = z_seq[:, -1]
         h = self.init_h(curr_z)
         
+        # 预计算网格
         yy, xx = torch.meshgrid(
             torch.linspace(-1, 1, H, device=z_seq.device),
             torch.linspace(-1, 1, W, device=z_seq.device),
@@ -481,23 +544,26 @@ class AdvectiveProjection(nn.Module):
         flow_maps = [] 
         
         for i in range(self.t_out):
-            flow_delta, h = self.flow_predictor(curr_z, h)
+            # 1. 联合预测流场和生消残差
+            flow_delta, residual, h = self.flow_predictor(curr_z, h)
             
-            # 收集流场增量
             flow_maps.append(flow_delta) 
             
+            # 2. 执行平流 (Advection Step)
             flow_field = flow_delta.permute(0, 2, 3, 1)
             grid = base_grid + flow_field
             
-            # [修复] 统一物理边界条件: 'reflection'
-            # 之前的 'zeros' 会导致移出边界的云团被截断，与 Loss 中的 reflection 不一致
-            next_z = F.grid_sample(
+            z_advected = F.grid_sample(
                 curr_z, 
                 grid, 
                 mode='bilinear', 
-                padding_mode='reflection',  # <--- 修改点
+                padding_mode='reflection', # 保持物理边界一致性
                 align_corners=False
             )
+            
+            # 3. 执行生消更新 (Evolution Step)
+            # 修正了原版“纯平流”无法预测强度变化的缺陷
+            next_z = z_advected + residual
             
             curr_z = next_z
             preds.append(curr_z)
