@@ -33,7 +33,7 @@ class ModelConfig(BaseModel):
     N_T: int = 8            # 时间演变模块的堆叠层数 (Mamba Block 数量)
     
     # Mamba 核心参数
-    mamba_d_state: int = 16 # SSM 状态维度 (State Space Dimension)
+    mamba_d_state: int = 32 # SSM 状态维度 (State Space Dimension)
     mamba_d_conv: int = 4   # 局部卷积核大小 (Local Conv Kernel Size)
     mamba_expand: int = 2   # 扩展因子 (Expansion Factor, e.g., 2 * d_model)
     use_checkpoint: bool = True # 是否开启梯度检查点 (Gradient Checkpointing) 以节省显存
@@ -61,14 +61,17 @@ class ModelConfig(BaseModel):
     decay_rate: float = 0.1      # 衰减率
     
     # =========================================================
-    # 5. 损失函数配置 (SOTA Loss Configuration)
+    # 5. 损失函数配置 (Loss Functions Configuration)
     # =========================================================
-    weight_bal_mse: float = 1.0
-    weight_facl: float = 0.05
-    weight_gdl: float = 0.5
-    weight_csi: float = 0.5
-    weight_msssim: float = 0.5
-    weight_lpips: float = 0.0
+    weight_bal_mse: float = 1.0   # 强度基准
+    weight_dice: float = 1.0      # 抗坍塌核心
+    weight_csi: float = 1.0       # 指标优化核心
+    weight_gdl: float = 1.0       # 基础锐化核心
+    
+    # [可选 Loss]
+    weight_msssim: float = 0.1    # 【推荐】结构维持，权重给小一点 (0.1)
+    weight_facl: float = 0.01     # 【可选】频域纹理，权重极小 (0.01)
+    weight_lpips: float = 0.0     # 【关闭】不推荐
     
     # =========================================================
     # 6. 高级训练策略 (Advanced Strategy)

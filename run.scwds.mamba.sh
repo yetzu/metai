@@ -7,6 +7,7 @@
 #   3. Infer (Generate Submission Files 301x301)
 
 export PYTHONPATH=$PYTHONPATH:$(pwd)
+# 显存优化：减少碎片化
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
 export NCCL_P2P_DISABLE=0
 export NCCL_IB_DISABLE=0
@@ -21,7 +22,7 @@ fi
 MODE=$1
 
 # Device Configuration
-# Adjust DEVICES based on your available GPUs (e.g., "[0]" for single GPU)
+# 请根据实际情况调整显卡，例如单卡 "[0]" 或多卡 "[0,1,2,3]"
 DEVICES="[1,2,3]" 
 DATA_PATH="data/samples.jsonl"
 SAVE_DIR="./output" 
@@ -41,7 +42,7 @@ case $MODE in
             --trainer.strategy ddp \
             --trainer.precision bf16-mixed \
             --trainer.max_epochs 100 \
-            --trainer.log_every_n_steps 100 \
+            --trainer.log_every_n_steps 1000 \
             --trainer.accumulate_grad_batches 1 \
             --trainer.gradient_clip_val 0.5 \
             --trainer.gradient_clip_algorithm "norm" \
@@ -71,10 +72,11 @@ case $MODE in
             --model.lr 5e-4 \
             --model.min_lr 1e-6 \
             --model.weight_bal_mse 1.0 \
-            --model.weight_facl 0.01 \
-            --model.weight_gdl 0.1 \
-            --model.weight_csi 0.5 \
+            --model.weight_dice 1.0 \
+            --model.weight_csi 1.0 \
+            --model.weight_gdl 1.0 \
             --model.weight_msssim 0.1 \
+            --model.weight_facl 0.01 \
             --model.weight_lpips 0.0 \
             --model.use_curriculum_learning true \
             --model.use_temporal_weight true \
@@ -88,7 +90,7 @@ case $MODE in
         echo " [MetAI] Starting Test (Metrics & Evaluation)..."
         echo "----------------------------------------"
         
-        # Automatically find best Checkpoint
+        # 自动查找最佳 Checkpoint
         CKPT_PATH=$(find $SAVE_DIR -name "*val_score*.ckpt" | sort -V | tail -n 1)
         if [ -z "$CKPT_PATH" ]; then CKPT_PATH=$(find $SAVE_DIR -name "last.ckpt" | head -n 1); fi
         
@@ -115,9 +117,6 @@ case $MODE in
         echo "----------------------------------------"
         echo " [MetAI] Starting Inference (Submission Generation)..."
         echo "----------------------------------------"
-        
-        # Automatically use best/latest model in SAVE_DIR
-        # Output saved to ./submit/output
         
         python run/infer_scwds_mamba.py \
             --ckpt_dir "$SAVE_DIR" \
