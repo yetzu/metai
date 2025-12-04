@@ -74,6 +74,11 @@ case $MODE in
             --model.min_lr 1e-5 \
             --model.use_curriculum_learning true \
             --model.use_temporal_weight true \
+            --model.use_gan true \
+            --model.gan_start_epoch 10 \
+            --model.gan_weight 0.01 \
+            --model.discriminator_lr 2e-4 \
+            --model.noise_dim 32 \
             --data.data_path $DATA_PATH \
             --data.batch_size $BATCH_SIZE \
             --data.num_workers 8

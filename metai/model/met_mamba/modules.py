@@ -104,89 +104,118 @@ class TimeAlignBlock(nn.Module):
 # 稀疏计算组件 (Structured Sparse Components)
 # ==========================================
 
-class SpatialSparseTokenHandler(nn.Module):
+class LearnableSparseHandler(nn.Module):
     """
-    [结构化空间稀疏处理器 - 重构版]
-    策略：保持时间轴 T 完整，仅筛选高价值的空间坐标 (H, W)。
-    物理意义：追踪活跃天气系统（如高反射率区域）的完整时间演变过程，忽略静止背景。
+    [改进版: 可微稀疏处理器]
+    
+    核心机制:
+    1. Router Network: 使用轻量级 CNN 预测每个空间位置的重要性得分 (Score)。
+    2. Straight-Through Estimator (STE): 
+       在 Forward 阶段使用硬截断 (Top-K) 提取特征;
+       在 Backward 阶段通过重参数化技巧允许梯度流回 Score 网络。
+       
+    这解决了传统 Top-K 操作不可导导致的模型无法自主学习“关注点”的问题。
     """
-    def __init__(self, sparse_ratio=0.5):
+    def __init__(self, dim, sparse_ratio=0.5):
         super().__init__()
         self.sparse_ratio = sparse_ratio
+        
+        # 路由网络：从特征中提取空间重要性热力图
+        # 输入 dim -> 降维 -> 1通道 Score
+        self.router = nn.Sequential(
+            nn.Conv2d(dim, dim // 4, kernel_size=3, padding=1),
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(dim // 4, 1, kernel_size=1)
+        )
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None: nn.init.constant_(m.bias, 0)
 
     def sparsify(self, x):
         """
-        Input: [B, T, C, H, W] (保持时空结构)
+        Input: [B, T, C, H, W]
         
         Returns:
-            x_sparse: [B, K, T, C]  <- K 是选中的空间点数，T 是完整时间序列
-            indices:  [B, K]        <- 选中的空间索引 (0 ~ H*W-1)
-            shape:    tuple         <- 用于恢复原始形状
+            x_sparse: [B, K, T, C]  (包含梯度注入)
+            top_indices: [B, K]     (用于恢复位置)
+            shape_info: tuple       (原始形状)
         """
         B, T, C, H, W = x.shape
         N_spatial = H * W
         
-        # 1. 计算空间重要性图 (Spatial Importance Map)
-        # 策略：评估每个空间位置在整个时间段 T 内的总能量/活跃度
-        # [B, T, C, H, W] -> [B, H, W] (对 T 和 C 求范数/平均)
-        # 这里使用 L2 Norm 来表示能量
-        spatial_energy = x.norm(dim=2).mean(dim=1) 
+        # 1. 计算重要性分数 (Learnable Score)
+        # 策略：计算时间维度的均值作为空间分布的代表 (假设短时间内活跃区域相对稳定)
+        # x_mean: [B, C, H, W]
+        x_mean = x.mean(dim=1) 
         
-        # 展平空间维度: [B, H*W]
-        spatial_scores = spatial_energy.view(B, N_spatial)
+        # 生成 Score Map: [B, 1, H, W] -> [B, H*W]
+        scores_map = torch.sigmoid(self.router(x_mean)) 
+        scores_flat = scores_map.view(B, N_spatial)
         
         # 2. 确定保留数量 K
         keep_k = max(1, int(N_spatial * (1.0 - self.sparse_ratio)))
         
-        # 3. Top-K 选择 (仅在空间维度筛选)
-        _, top_indices = torch.topk(spatial_scores, k=keep_k, dim=1)
-        # 排序索引以保持空间相对顺序 (可选，但在纯时间 Mamba 中不影响 T 轴)
+        # 3. Top-K 选择 (Forward Pass)
+        # 获取 Top-K 的分数和索引
+        top_scores, top_indices = torch.topk(scores_flat, k=keep_k, dim=1)
+        
+        # 排序索引以保持空间相对顺序 (这对某些位置敏感的操作有帮助)
         top_indices, _ = torch.sort(top_indices, dim=1) # [B, K]
         
-        # 4. Gather 操作 (提取完整的时空柱)
-        # 目标: 从 [B, T, C, H, W] 中提取 [B, K, T, C]
-        
-        # 调整 x 形状以便 gather: [B, H*W, T, C]
+        # 4. 特征提取 (Gather)
+        # 调整 x 形状: [B, H*W, T, C]
         x_flat = x.permute(0, 3, 4, 1, 2).reshape(B, N_spatial, T, C)
         
-        # 扩展索引以匹配 T 和 C 维度
-        # indices: [B, K] -> [B, K, T, C]
+        # 扩展索引维度以匹配特征: [B, K] -> [B, K, T, C]
         idx_expanded = top_indices.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T, C)
         
-        # 提取: [B, K, T, C]
-        x_sparse = torch.gather(x_flat, 1, idx_expanded)
+        # 提取特征
+        x_gathered = torch.gather(x_flat, 1, idx_expanded)
+        
+        # 5. [关键] 梯度注入 (Gradient Injection via STE)
+        # 重新获取对应位置的 Score，并扩展维度
+        # 注意：这里需要重新 gather score 以保证顺序一致
+        score_gathered = torch.gather(
+            scores_flat.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T, C), 
+            1, idx_expanded
+        )
+        
+        # 构造 STE:
+        # Forward: x_sparse = x_gathered * 1.0 (数值不变)
+        # Backward: x_sparse = x_gathered * score (梯度流经 score)
+        # 实现方式: x * (s / s.detach())
+        x_sparse = x_gathered * (score_gathered / (score_gathered.detach() + 1e-6))
         
         return x_sparse, top_indices, (B, T, C, H, W)
 
     def densify(self, x_sparse, indices, original_shape):
         """
-        将稀疏计算结果填回原始稠密形状。
-        Args:
-            x_sparse: [B, K, T, C]
-            indices:  [B, K]
-            original_shape: (B, T, C, H, W)
-        Returns:
-            x_dense: [B, T, C, H, W] (未选中位置填充为 0)
+        将稀疏 Token 填回原始稠密网格。
         """
         B, T, C, H, W = original_shape
-        K = x_sparse.shape[1]
         N_spatial = H * W
         
-        # 准备空白容器: [B, H*W, T, C]
+        # 准备空白画布
         x_dense_flat = torch.zeros(B, N_spatial, T, C, device=x_sparse.device, dtype=x_sparse.dtype)
         
         # 扩展索引
         idx_expanded = indices.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T, C)
         
-        # 填充回原位
+        # 填充
         x_dense_flat.scatter_(1, idx_expanded, x_sparse)
         
-        # 恢复原始形状: [B, H*W, T, C] -> [B, T, C, H, W]
+        # 恢复形状
         x_dense = x_dense_flat.view(B, H, W, T, C).permute(0, 3, 4, 1, 2)
         
         return x_dense
 
 class LocalityEnhancedMLP(nn.Module):
+    """
+    [Fallback Component] 稠密模式下使用的 MLP，带 DWConv 增强局部性。
+    """
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
         out_features = out_features or in_features
@@ -204,6 +233,7 @@ class LocalityEnhancedMLP(nn.Module):
             if m.bias is not None: nn.init.constant_(m.bias, 0)
 
     def forward(self, x, H, W):
+        # x: [B, L, C] where L = T*H*W
         x = self.fc1(x)
         B, L, C = x.shape
         T = L // (H * W)
@@ -222,13 +252,13 @@ class LocalityEnhancedMLP(nn.Module):
 
 class STMambaBlock(nn.Module):
     """
-    [结构化稀疏 Mamba 模块 - 重构版]
-    架构：Input -> Spatial Sparsify -> Time-Domain Mamba -> Spatial Mixing -> Densify -> Output
+    [STMambaBlock v2.0]
     
-    核心改进：
-    1. 使用 'SpatialSparseTokenHandler'，避免破坏时间因果性。
-    2. Mamba 扫描严格限制在时间轴 T 上，每个空间点视为独立的序列。
-    3. 引入 'spatial_mixer' 在稀疏状态下进行空间信息交互。
+    架构改进:
+    1. Sparse Routing: 使用 LearnableSparseHandler 进行可微 Token 选择。
+    2. Time Evolution: 使用 Mamba 处理时间序列 (独立处理每个空间 Token)。
+    3. Global Spatial Mixing: 使用 Self-Attention 处理空间交互，替代简单的 MLP。
+       这赋予了模型类似 Earthformer 的全局视野，但计算量仅限于 K 个活跃点。
     """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, 
                  d_state=16, d_conv=4, expand=2, use_checkpoint=False, 
@@ -236,34 +266,34 @@ class STMambaBlock(nn.Module):
                  anneal_start_epoch=5, anneal_end_epoch=10):
         super().__init__()
         self.use_checkpoint = use_checkpoint
-        self.target_sparse_ratio = sparse_ratio # 目标稀疏率
+        self.target_sparse_ratio = sparse_ratio 
         self.anneal_start = anneal_start_epoch
         self.anneal_end = anneal_end_epoch
         
         self.norm1 = RMSNorm(dim)
         
         # --- Mamba 配置 ---
-        # 关键修改：Mamba 现在处理的是单一空间点的"时间序列"
-        # 形状预期: [Batch_Size * K, Seq_Len=T, Dim]
+        # Mamba 负责时间建模: Input [Batch, Time, Dim]
+        # 这里我们将空间维度视为 Batch 的一部分
         mamba_cfg = dict(d_model=dim, d_state=d_state, d_conv=d_conv, expand=expand)
         self.scan = Mamba(**mamba_cfg)
         
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = RMSNorm(dim)
         
-        # --- 稀疏/混合组件 ---
-        # 初始化时只要 target > 0 就实例化稀疏组件
+        # --- 路径分支选择 ---
         if self.target_sparse_ratio > 0:
-            self.sparse_handler = SpatialSparseTokenHandler(self.target_sparse_ratio)
-            # 空间混合层 (Spatial Mixing): 允许被选中的 K 个点之间交换信息
-            # 简单的 MLP 保持高效
-            self.spatial_mixer = nn.Sequential(
-                nn.Linear(dim, dim),
-                nn.GELU(),
-                nn.Linear(dim, dim)
+            # 1. 可微稀疏处理器
+            self.sparse_handler = LearnableSparseHandler(dim, self.target_sparse_ratio)
+            
+            # 2. [改进] 稀疏空间自注意力 (Sparse Self-Attention)
+            # 允许 K 个活跃云团之间进行全局交互
+            self.spatial_attn = nn.MultiheadAttention(
+                embed_dim=dim, num_heads=4, batch_first=True, dropout=drop
             )
+            self.norm_attn = nn.LayerNorm(dim)
         else:
-            # 稠密模式下的 MLP
+            # Fallback: 稠密 MLP
             self.mlp = LocalityEnhancedMLP(dim, int(dim * mlp_ratio), dim, act_layer=act_layer, drop=drop)
             
         self.apply(self._init_weights)
@@ -272,14 +302,14 @@ class STMambaBlock(nn.Module):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Conv2d):
+            trunc_normal_(m.weight, std=.02)
 
     def _get_curr_sparse_ratio(self, epoch):
         """计算当前的退火稀疏率"""
         if self.target_sparse_ratio <= 0: return 0.0
         if epoch < self.anneal_start: return 0.0
         if epoch >= self.anneal_end: return self.target_sparse_ratio
-        
-        # 线性插值
         progress = (epoch - self.anneal_start) / (self.anneal_end - self.anneal_start)
         return self.target_sparse_ratio * progress
 
@@ -287,86 +317,78 @@ class STMambaBlock(nn.Module):
         """
         Args:
             x_in: [B, T, C, H, W]
-            current_epoch: 当前训练轮次，用于计算稀疏率
+            current_epoch: 当前 Epoch，用于稀疏率退火
         """
         B, T, C, H, W = x_in.shape
         L = T * H * W
         
-        # 动态计算当前稀疏率
         curr_ratio = self._get_curr_sparse_ratio(current_epoch)
-        
         shortcut = x_in
         
-        # === 分支 A: 结构化稀疏路径 (High Performance & Physics Aware) ===
-        # 仅当当前比率 > 0 且拥有稀疏组件时启用
+        # === 分支 A: 稀疏路径 (High Performance & Global Context) ===
         if curr_ratio > 0 and hasattr(self, 'sparse_handler'):
             # 临时覆盖 handler 的 ratio
             original_ratio = self.sparse_handler.sparse_ratio
             self.sparse_handler.sparse_ratio = curr_ratio
             
-            # 1. 稀疏化: [B, K, T, C]
-            # 此时保持了 T 的完整性，K 是活跃的空间点
-            # x_norm = x_in # 在 sparse_handler 内部会计算 norm
+            # 1. 稀疏化 (Differentiable)
+            # x_sparse: [B, K, T, C]
             x_sparse, indices, shape_info = self.sparse_handler.sparsify(x_in)
             
-            # 恢复 ratio 状态
+            # 恢复 ratio
             self.sparse_handler.sparse_ratio = original_ratio
             
             K = x_sparse.shape[1]
             
-            # 2. 准备 Mamba 输入
-            # 将 (B, K) 合并，视作独立的 Batch，序列长度为 T
-            # [B, K, T, C] -> [B*K, T, C]
+            # 2. 时间演变 (Time Mixing via Mamba)
+            # 将空间点 K 视为独立的 Batch
+            # Input: [B*K, T, C]
             z_time = x_sparse.reshape(B * K, T, C)
             z_time = self.norm1(z_time)
             
-            # 3. Mamba 时间扫描 (Time Evolution)
-            # 仅在时间轴上进行因果推演
             if self.use_checkpoint and z_time.requires_grad:
                 z_time = checkpoint(self.scan, z_time, use_reentrant=False)
             else:
                 z_time = self.scan(z_time)
                 
-            # 4. 空间混合 (Spatial Mixing)
-            # Mamba 完成后，让这 K 个点交互 (模拟平流/扩散)
-            # [B*K, T, C] -> [B, T, K, C]
-            z_space = z_time.view(B, K, T, C).permute(0, 2, 1, 3) 
-            z_space = self.norm2(z_space)
-            z_space = self.spatial_mixer(z_space) # MLP 在 C 维度操作，但在 K 维度共享权重
+            # 3. 空间交互 (Spatial Mixing via Attention)
+            # 变换维度以进行空间 Attention: [B*K, T, C] -> [B, T, K, C] -> [B*T, K, C]
+            # 此时 Batch 变为 (B*T)，序列长度为 K (活跃点数量)
+            z_space_in = z_time.view(B, K, T, C).permute(0, 2, 1, 3).reshape(B * T, K, C)
             
-            # 5. 残差连接 + 反稀疏化
-            # 恢复形状 [B, K, T, C]
-            x_update_sparse = z_space.permute(0, 2, 1, 3) 
+            # Global Attention: 任意两个活跃点都可以交互
+            # Query=Key=Value=z_space_in
+            attn_out, _ = self.spatial_attn(z_space_in, z_space_in, z_space_in)
             
-            # 将更新量加回 (Dense shortcut + Sparse update)
-            # 未被选中的点 update 为 0
+            # Residual + Norm
+            z_space_out = self.norm_attn(z_space_in + attn_out)
+            
+            # 4. 还原与反稀疏化
+            # [B*T, K, C] -> [B, K, T, C]
+            x_update_sparse = z_space_out.view(B, T, K, C).permute(0, 2, 1, 3) 
+            
+            # Densify: 未选中的点为 0
             x_update_dense = self.sparse_handler.densify(x_update_sparse, indices, shape_info)
             
-            # 最终输出
+            # 最终输出 (Dense Shortcut + Sparse Update)
             x_out = shortcut + self.drop_path(x_update_dense)
             
         # === 分支 B: 稠密路径 (Fallback/Warmup) ===
         else:
-            # 兼容 Mamba 扫描逻辑，但全量计算
-            # 展平以便统一处理：这里为了利用 Mamba 的序列特性，我们将 H*W 视为 Batch
-            # [B, T, C, H, W] -> [B, H*W, T, C] -> [B*H*W, T, C]
+            # 全量计算，无稀疏化
+            # [B, T, C, H, W] -> [B*H*W, T, C]
             x_norm = x_in.permute(0, 3, 4, 1, 2).reshape(B * H * W, T, C)
             x_norm = self.norm1(x_norm)
             
-            # 时间扫描
             if self.use_checkpoint and x_norm.requires_grad:
                 z_time = checkpoint(self.scan, x_norm, use_reentrant=False)
             else:
                 z_time = self.scan(x_norm)
                 
-            # 还原形状
-            # [B*H*W, T, C] -> [B, T, C, H, W]
             x_mamba = z_time.view(B, H, W, T, C).permute(0, 3, 4, 1, 2)
             x_mid = shortcut + self.drop_path(x_mamba)
             
-            # 空间混合 (使用全卷积/MLP)
-            # 此时使用 LocalityEnhancedMLP (带 DWConv)
-            # 需要适配 MLP 输入 [B, L, C] -> [B, T*H*W, C]
+            # 使用 MLP 进行局部空间混合
             x_mid_flat = x_mid.permute(0, 1, 3, 4, 2).reshape(B, L, C)
             x_mlp = self.mlp(self.norm2(x_mid_flat), H, W)
             
@@ -416,9 +438,6 @@ class AdvectiveProjection(nn.Module):
     """
     [显式平流投影层]
     利用物理约束 (流场) 对特征进行时间推进。
-    
-    修改：
-    padding_mode='zeros'，避免物理上的"镜像反射"违背，更符合开放边界系统。
     """
     def __init__(self, dim, t_in, t_out):
         super().__init__()
@@ -452,7 +471,7 @@ class AdvectiveProjection(nn.Module):
             flow_field = flow_delta.permute(0, 2, 3, 1)
             grid = base_grid + flow_field
             
-            # [物理修正] 使用 'zeros' 填充，避免边界产生虚假回波
+            # 使用 'zeros' 填充，避免边界产生虚假回波
             next_z = F.grid_sample(curr_z, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
             
             curr_z = next_z

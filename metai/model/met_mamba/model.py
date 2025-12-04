@@ -12,6 +12,10 @@ from .modules import (
     AdvectiveProjection
 )
 
+# ==============================================================================
+# 辅助函数 (Helper Functions)
+# ==============================================================================
+
 def sampling_generator(N, reverse=False):
     """
     生成下采样/上采样控制序列。
@@ -22,10 +26,74 @@ def sampling_generator(N, reverse=False):
     if reverse: return list(reversed(samplings[:N]))
     else: return samplings[:N]
 
+# ==============================================================================
+# 判别器模块 (Discriminator for GAN Training)
+# ==============================================================================
+
+class TemporalDiscriminator(nn.Module):
+    """
+    [新增组件] 时空判别器
+    
+    功能：
+    基于 3D 卷积的判别网络，用于区分模型生成的雷达回波序列与真实观测序列。
+    它关注时空纹理的真实性，迫使生成器恢复短时强降水的锐利边界和极值强度。
+    
+    架构特点：
+    1. 使用 Spectral Normalization (谱归一化) 稳定 GAN 的训练动态。
+    2. 输出为 PatchGAN 风格的 Logits Map，而非单一标量，关注局部真实性。
+    """
+    def __init__(self, in_channels=1, base_dim=64):
+        super().__init__()
+        
+        # 定义带谱归一化的 3D 卷积
+        def sn_conv3d(in_c, out_c, k, s, p):
+            return nn.utils.spectral_norm(nn.Conv3d(in_c, out_c, k, s, p))
+
+        self.blocks = nn.Sequential(
+            # Input: [B, C, T, H, W]
+            # Layer 1: 下采样 -> [B, 64, T/2, H/2, W/2]
+            sn_conv3d(in_channels, base_dim, 4, 2, 1), 
+            nn.LeakyReLU(0.2, inplace=True),
+            
+            # Layer 2: 下采样 -> [B, 128, T/4, H/4, W/4]
+            sn_conv3d(base_dim, base_dim*2, 4, 2, 1), 
+            nn.InstanceNorm3d(base_dim*2),
+            nn.LeakyReLU(0.2, inplace=True),
+            
+            # Layer 3: 下采样 -> [B, 256, T/8, H/8, W/8]
+            sn_conv3d(base_dim*2, base_dim*4, 4, 2, 1), 
+            nn.InstanceNorm3d(base_dim*4),
+            nn.LeakyReLU(0.2, inplace=True),
+            
+            # Layer 4: 特征提取
+            sn_conv3d(base_dim*4, base_dim*8, 4, 2, 1),
+            nn.InstanceNorm3d(base_dim*8),
+            nn.LeakyReLU(0.2, inplace=True),
+        )
+        # Output Head: 映射到判别分数
+        self.out_head = nn.Conv3d(base_dim*8, 1, kernel_size=1) 
+
+    def forward(self, x):
+        """
+        Args:
+            x: [B, T, C, H, W] (生成器输出或真实标签)
+        Returns:
+            logits: [B, 1, T', H', W']
+        """
+        # 调整维度适配 Conv3d: [B, T, C, H, W] -> [B, C, T, H, W]
+        x = x.permute(0, 2, 1, 3, 4)
+        feat = self.blocks(x)
+        logits = self.out_head(feat)
+        return logits
+
+# ==============================================================================
+# 编码器与解码器 (Encoder & Decoder)
+# ==============================================================================
+
 class Encoder(nn.Module):
     """
     空间编码器 (Spatial Encoder)
-    负责将输入的时空序列数据 [B, T, C, H, W] 编码为潜在特征。
+    负责将输入的时空序列数据 [B, T, C, H, W] 逐帧编码为潜在特征。
     """
     def __init__(self, C_in, C_hid, N_S, spatio_kernel):
         super().__init__()
@@ -60,6 +128,7 @@ class Encoder(nn.Module):
             
         # 返回最终的潜在特征和浅层特征(用于Skip connection)
         return latent, enc1
+
 
 class Decoder(nn.Module):
     """
@@ -100,18 +169,31 @@ class Decoder(nn.Module):
         # 输出投影
         return self.readout(Y)
 
+# ==============================================================================
+# 演变网络 (Evolution Network)
+# ==============================================================================
+
 class EvolutionNet(nn.Module):
     """
-    演变网络 (Evolution Network)
-    核心模块，利用 Mamba (SSM) 建模时空序列的演变规律。
+    演变网络 (Evolution Network) - v2.0
     
-    [修改] 增加了 anneal_start_epoch 和 anneal_end_epoch 参数传递
+    核心模块，利用 STMambaBlock 建模时空序列的演变规律。
+    
+    [改进特性] 噪声注入 (Noise Injection):
+    在输入特征中叠加随机噪声，使确定性的 Mamba 网络转变为概率生成模型。
+    这允许模型从"平均分布"中采样出具体的"纹理实例"，解决模糊问题。
     """
     def __init__(self, dim_in, dim_hid, num_layers, drop=0., drop_path=0., 
                  mamba_kwargs={}, use_checkpoint=True, max_t=64, input_resolution=(64, 64),
                  sparse_ratio=0.0,
-                 anneal_start_epoch=5, anneal_end_epoch=10): # [新增参数]
+                 anneal_start_epoch=5, anneal_end_epoch=10):
         super().__init__()
+        
+        # [新增] 噪声投影层：将低维随机噪声映射到特征空间
+        # 假设噪声源维度为 32 (可配置)
+        self.noise_dim = 32
+        self.noise_proj = nn.Linear(self.noise_dim, dim_hid) 
+        
         # 特征投影层
         self.proj_in = nn.Linear(dim_in, dim_hid)
         self.proj_out = nn.Linear(dim_hid, dim_in)
@@ -123,7 +205,7 @@ class EvolutionNet(nn.Module):
         H_feat, W_feat = input_resolution
         self.pos_embed_s = nn.Parameter(torch.zeros(1, 1, dim_hid, H_feat, W_feat)) 
         
-        # 时间提示 (Time Prompt): 针对稀疏雷达数据的优化，增强模型对时间节点的感知
+        # 时间提示 (Time Prompt)
         self.time_prompt = nn.Parameter(torch.zeros(1, max_t, dim_hid, 1, 1))
 
         # 权重初始化
@@ -134,7 +216,7 @@ class EvolutionNet(nn.Module):
         # Drop path设置 (随机深度)
         dpr = [x.item() for x in torch.linspace(1e-2, drop_path, num_layers)]
         
-        # 堆叠 STMambaBlock
+        # 堆叠 STMambaBlock (已包含 Global Attention 和 Sparse Routing)
         self.layers = nn.ModuleList([
             STMambaBlock(
                 dim_hid, 
@@ -142,23 +224,44 @@ class EvolutionNet(nn.Module):
                 drop_path=dpr[i], 
                 use_checkpoint=use_checkpoint,
                 sparse_ratio=sparse_ratio,
-                anneal_start_epoch=anneal_start_epoch, # [传递]
-                anneal_end_epoch=anneal_end_epoch,     # [传递]
+                anneal_start_epoch=anneal_start_epoch, 
+                anneal_end_epoch=anneal_end_epoch,     
                 **mamba_kwargs
             ) for i in range(num_layers)
         ])
 
     def forward(self, x, current_epoch=0):
-        # 输入 x: [B, T, C, H, W]
+        """
+        Args:
+            x: [B, T, C, H, W] 输入特征
+            current_epoch: 当前训练轮次
+        """
         B, T, C, H, W = x.shape
         
+        # 1. 噪声生成与注入 (Stochasticity)
+        # 策略：训练时注入随机噪声；推理时为了确定性基准可注入零噪声，
+        #      或者为了生成多样性结果注入随机噪声。
+        if self.training:
+            noise = torch.randn(B, T, self.noise_dim, device=x.device)
+        else:
+            # 默认推理使用零噪声 (Mean Prediction)
+            # 若需多样性生成，此处可改为 torch.randn
+            noise = torch.zeros(B, T, self.noise_dim, device=x.device)
+            
+        # 映射噪声: [B, T, 32] -> [B, T, C_hid] -> [B, T, C_hid, 1, 1]
+        noise_emb = self.noise_proj(noise).unsqueeze(3).unsqueeze(3)
+        
+        # 2. 特征投影
         # 调整维度以适应 Linear 层: [B, T, H, W, C]
         x = x.permute(0, 1, 3, 4, 2).contiguous() 
         x = self.proj_in(x)
         x = x.permute(0, 1, 4, 2, 3).contiguous() # 回到 [B, T, C_hid, H, W]
         
+        # 3. 融合噪声 (加法融合)
+        x = x + noise_emb
+        
         # --- 位置编码插值逻辑 ---
-        # 1. 处理时间提示 (Time Prompt) 和 时间位置编码 (Time PE)
+        # 4. 处理时间提示 (Time Prompt) 和 时间位置编码 (Time PE)
         if T <= self.time_prompt.shape[1]:
             t_prompt = self.time_prompt[:, :T, ...]
             t_pos = self.pos_embed_t[:, :T, ...]
@@ -172,7 +275,7 @@ class EvolutionNet(nn.Module):
                 size=T, mode='linear'
             ).permute(0,2,1).unsqueeze(-1).unsqueeze(-1)
 
-        # 2. 处理空间位置编码 (Spatial PE)
+        # 5. 处理空间位置编码 (Spatial PE)
         if (H, W) != self.pos_embed_s.shape[-2:]:
             s_pos = F.interpolate(
                 self.pos_embed_s, size=(H, W), mode='bilinear', align_corners=False
@@ -180,24 +283,35 @@ class EvolutionNet(nn.Module):
         else:
             s_pos = self.pos_embed_s
 
-        # 3. 将位置编码和提示叠加到特征上
+        # 6. 将位置编码和提示叠加到特征上
         x = x + t_prompt + t_pos + s_pos
         
-        # 通过 Mamba 层进行演变
+        # 7. 通过 STMamba 层进行演变
         for layer in self.layers:
             # 将 current_epoch 传递给 Block 用于稀疏率退火
             x = layer(x, current_epoch=current_epoch)
             
-        # 输出投影
+        # 8. 输出投影
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = self.proj_out(x)
         x = x.permute(0, 1, 4, 2, 3).contiguous()
         return x
 
+# ==============================================================================
+# 主模型 (Main Model Class)
+# ==============================================================================
+
 class MeteoMamba(nn.Module):
     """
-    MeteoMamba 主模型类
-    整体架构：Encoder -> EvolutionNet (Latent Space) -> Advective Time Projection -> Decoder
+    MeteoMamba 主模型类 - v2.0 (Generative & Sparse)
+    
+    整体架构：
+    Encoder -> EvolutionNet (with Noise Injection & Mamba) -> Advective Time Projection -> Decoder
+    
+    集成特性：
+    1. 物理约束 (Physical Alignment): 显式平流层 (AdvectiveProjection)。
+    2. 生成能力 (Generative): 内置 Discriminator 和 EvolutionNet 噪声注入。
+    3. 全局视野 (Global Context): 通过 STMambaBlock 中的 Attention 实现。
     """
     def __init__(self, 
                  in_shape,      # 输入形状 (C, H, W)
@@ -215,7 +329,6 @@ class MeteoMamba(nn.Module):
                  mamba_expand=2,
                  use_checkpoint=True,
                  mamba_sparse_ratio=0.5, 
-                 # [新增] 接收退火参数，提供默认值
                  anneal_start_epoch=5,
                  anneal_end_epoch=10,
                  **kwargs):
@@ -239,7 +352,7 @@ class MeteoMamba(nn.Module):
         ds_factor = 2 ** (N_S // 2) 
         evo_res = (H // ds_factor, W // ds_factor)
 
-        # 2. 初始化演变网络
+        # 2. 初始化演变网络 (支持噪声注入)
         self.evolution = EvolutionNet(
             hid_S, hid_T, N_T, 
             drop=0.0, drop_path=0.1, 
@@ -247,11 +360,11 @@ class MeteoMamba(nn.Module):
             use_checkpoint=use_checkpoint,
             input_resolution=evo_res,
             sparse_ratio=mamba_sparse_ratio,
-            anneal_start_epoch=anneal_start_epoch, # [传递]
-            anneal_end_epoch=anneal_end_epoch      # [传递]
+            anneal_start_epoch=anneal_start_epoch, 
+            anneal_end_epoch=anneal_end_epoch      
         )
         
-        # 3. 显式平流时间投影层
+        # 3. 显式平流时间投影层 (物理约束)
         self.latent_time_proj = AdvectiveProjection(
             dim=hid_S, 
             t_in=T_in, 
@@ -264,7 +377,20 @@ class MeteoMamba(nn.Module):
         # 5. 跳跃连接投影层
         self.skip_proj = TimeAlignBlock(T_in, self.T_out, hid_S)
 
+        # 6. [新增] 判别器 (Discriminator)
+        # 注意：Discriminator 是模型的一部分，但在训练时需要使用不同的优化器更新
+        self.discriminator = TemporalDiscriminator(in_channels=self.out_channels)
+
     def forward(self, x_raw, current_epoch=0):
+        """
+        Args:
+            x_raw: [B, T_in, C_in, H, W] 原始输入序列
+            current_epoch: 当前 Epoch (用于稀疏率调度)
+            
+        Returns:
+            Y: [B, T_out, C_out, H, W] 预测结果
+            flows: [B, T_out, 2, H, W] 潜在流场 (用于物理约束 Loss)
+        """
         # x_raw 输入形状: [B, T_in, C_in, H, W]
         B, T_in, C_in, H, W = x_raw.shape
         
@@ -272,12 +398,12 @@ class MeteoMamba(nn.Module):
         embed, skip = self.enc(x_raw) 
         _, C_hid, H_, W_ = embed.shape 
         
-        # 2. 演变阶段 (Evolution)
+        # 2. 演变阶段 (Evolution with Noise)
         z = embed.view(B, T_in, C_hid, H_, W_)
         z = self.evolution(z, current_epoch=current_epoch)
         
-        # 3. 时间投影阶段 (Time Projection)
-        # 返回 z 和 flows
+        # 3. 时间投影阶段 (Time Projection via Advection)
+        # 返回演变后的特征 z 和 预测的流场 flows
         z, flows = self.latent_time_proj(z) 
         
         # 重塑为 Decoder 需要的格式: [B*T_out, C_hid, H_, W_]
@@ -293,6 +419,7 @@ class MeteoMamba(nn.Module):
         Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         
         # 6. 残差连接 (Residual Connection)
+        # 基于最后一帧进行增量预测
         last_frame = x_raw[:, -1:, :self.out_channels, :, :].detach() 
         Y = last_frame + Y_diff
         

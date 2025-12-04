@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Union
 
 # ==============================================================================
 # 工具函数 & 物理常量
@@ -204,15 +204,53 @@ class PhysicsConstraintsLoss(nn.Module):
         return loss_cons, loss_warp
 
 # ==============================================================================
+# [新增] 对抗损失 (Adversarial Loss for GAN)
+# ==============================================================================
+
+class GANLoss(nn.Module):
+    """
+    [对抗损失] 支持 Hinge Loss (推荐用于 Spectral Norm) 和 Vanilla GAN Loss。
+    """
+    def __init__(self, mode='hinge'):
+        super().__init__()
+        self.mode = mode
+        
+    def get_disc_loss(self, logits_real, logits_fake):
+        """
+        计算判别器 Loss: 尽可能区分真假
+        """
+        if self.mode == 'hinge':
+            loss_real = F.relu(1.0 - logits_real).mean()
+            loss_fake = F.relu(1.0 + logits_fake).mean()
+            return (loss_real + loss_fake) / 2.0
+        elif self.mode == 'vanilla':
+            loss_real = F.binary_cross_entropy_with_logits(logits_real, torch.ones_like(logits_real))
+            loss_fake = F.binary_cross_entropy_with_logits(logits_fake, torch.zeros_like(logits_fake))
+            return (loss_real + loss_fake) / 2.0
+        else:
+            raise ValueError(f"Unknown GAN mode: {self.mode}")
+
+    def get_gen_loss(self, logits_fake):
+        """
+        计算生成器 Loss: 尽可能骗过判别器
+        """
+        if self.mode == 'hinge':
+            return -logits_fake.mean()
+        elif self.mode == 'vanilla':
+            return F.binary_cross_entropy_with_logits(logits_fake, torch.ones_like(logits_fake))
+        else:
+            raise ValueError(f"Unknown GAN mode: {self.mode}")
+
+# ==============================================================================
 # 智能混合 Loss (Automatic Weighted Hybrid Loss)
 # ==============================================================================
 
 class HybridLoss(nn.Module):
     """
-    [智能混合损失 - 稳定性增强版]
+    [智能混合损失 - 内容重建部分]
     基于 Kendall's Multi-Task Learning 策略，增加正则化防止权重坍塌。
     
-    公式: Total_Loss = Sum( 0.5 * exp(-s) * Loss + 0.5 * s ) + 0.1 * Sum(s^2)
+    注意：此类仅计算 Content Loss，不包含 Adversarial Loss。
     """
     def __init__(self, 
                  use_temporal_weight: bool = True,
@@ -257,8 +295,6 @@ class HybridLoss(nn.Module):
         losses = torch.stack([l_mse, l_csi, l_spec, l_cons, l_warp])
         
         # 3. 自动加权计算 (稳定性修正)
-        # s: 可学习的不确定性参数
-        # [修改] 收紧 Bounds: max=3.0 (最小权重约为 0.025)，防止完全忽略某项任务
         s = self.params.clamp(min=-10.0, max=3.0).float()
         losses = losses.float()
         
@@ -268,14 +304,14 @@ class HybridLoss(nn.Module):
         # 贝叶斯多任务损失公式
         weighted_losses = 0.5 * (precision * losses + s)
         
-        # [新增] 正则化项: 迫使 s 接近 0，防止模型通过单纯降低权重来作弊
+        # 正则化项: 迫使 s 接近 0
         reg_loss = 0.1 * torch.sum(s ** 2)
         
         total_loss = weighted_losses.sum() + reg_loss
         
         # 4. 构建返回字典
         loss_dict = {
-            'total': total_loss,
+            'content_total': total_loss,
             # --- 原始 Loss ---
             'mse_raw': l_mse.detach(),
             'csi_raw': l_csi.detach(),
