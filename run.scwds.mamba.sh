@@ -43,7 +43,7 @@ case $MODE in
             --trainer.precision bf16-mixed \
             --trainer.max_epochs 100 \
             --trainer.log_every_n_steps 1000 \
-            --trainer.accumulate_grad_batches 1 \
+            --trainer.accumulate_grad_batches 2 \
             --trainer.gradient_clip_val 0.5 \
             --trainer.gradient_clip_algorithm "norm" \
             --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
@@ -68,16 +68,9 @@ case $MODE in
             --model.mamba_d_conv 4 \
             --model.mamba_expand 2 \
             --model.use_checkpoint true \
-            --model.warmup_epoch 20 \
-            --model.lr 5e-4 \
-            --model.min_lr 1e-6 \
-            --model.weight_bal_mse 1.0 \
-            --model.weight_dice 1.0 \
-            --model.weight_csi 1.0 \
-            --model.weight_gdl 1.0 \
-            --model.weight_msssim 0.1 \
-            --model.weight_facl 0.01 \
-            --model.weight_lpips 0.0 \
+            --model.warmup_epoch 10 \
+            --model.lr 1e-3 \
+            --model.min_lr 1e-5 \
             --model.use_curriculum_learning true \
             --model.use_temporal_weight true \
             --data.data_path $DATA_PATH \

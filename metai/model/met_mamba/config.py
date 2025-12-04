@@ -7,8 +7,8 @@ class ModelConfig(BaseModel):
     """
     MeteoMamba 模型配置类 (Configuration)
     
-    管理模型架构、训练超参数以及损失函数权重的统一配置接口。
-    基于 Pydantic 构建，支持类型检查与自动验证。
+    管理模型架构、训练超参数以及高级策略配置。
+    注意：Loss 权重现在由模型自动学习 (Kendall's Weighting)，因此不再此处手动配置。
     """
     
     # =========================================================
@@ -61,24 +61,13 @@ class ModelConfig(BaseModel):
     decay_rate: float = 0.1      # 衰减率
     
     # =========================================================
-    # 5. 损失函数配置 (Loss Functions Configuration)
+    # 5. 高级策略配置 (Advanced Strategy)
     # =========================================================
-    weight_bal_mse: float = 1.0   # 强度基准
-    weight_dice: float = 1.0      # 抗坍塌核心
-    weight_csi: float = 1.0       # 指标优化核心
-    weight_gdl: float = 1.0       # 基础锐化核心
-    weight_cons: float = 0.1      # 质量守恒权重 (建议小一点，防止伪影)
-    weight_flow: float = 0.5      # 光流一致性权重 (建议适中，引导运动)
-    
-    # [可选 Loss]
-    weight_msssim: float = 0.1    # 【推荐】结构维持，权重给小一点 (0.1)
-    weight_facl: float = 0.01     # 【可选】频域纹理，权重极小 (0.01)
-    weight_lpips: float = 0.0     # 【关闭】不推荐
-    
-    # =========================================================
-    # 6. 高级训练策略 (Advanced Strategy)
-    # =========================================================
+    # 课程学习：动态调整训练序列长度 (10 -> 20)，对稳定光流 Warp 至关重要
     use_curriculum_learning: bool = True 
+    
+    # 时间权重：是否在 Loss 计算中对后期帧给予更大权重 (Linear scaling)
+    # 配合自动加权 Loss 使用，即使 Loss 权重自动学习，时间维度的相对重要性仍需人工先验
     use_temporal_weight: bool = True
     
     # --- Pydantic 配置 ---
