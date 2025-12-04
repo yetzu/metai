@@ -7,7 +7,7 @@ import math
 from typing import Optional, Dict, Tuple
 
 # ==============================================================================
-# 工具函数 & 常量
+# 工具函数 & 物理常量
 # ==============================================================================
 
 # 物理参数：必须与 Dataset 的归一化逻辑严格一致
@@ -16,7 +16,10 @@ MM_MAX = 30.0
 LOG_NORM_FACTOR = math.log(MM_MAX + 1)
 
 def mm_to_lognorm(mm_val: float) -> float:
-    """将物理降水值 (mm) 转换为对数归一化值 (0-1)。"""
+    """
+    将物理降水值 (mm) 转换为对数归一化值 (0-1)。
+    用于在特征空间定义具有物理意义的阈值。
+    """
     return math.log(mm_val + 1) / LOG_NORM_FACTOR
 
 # ==============================================================================
@@ -25,54 +28,66 @@ def mm_to_lognorm(mm_val: float) -> float:
 
 class BalancedMSELoss(nn.Module):
     """
-    [强度回归 Loss]
-    针对气象数据的长尾分布设计。保留了激进的权重策略，
-    强迫模型关注稀有但重要的强降水事件。
+    [强度回归 Loss - 长尾分布优化版]
+    
+    科学原理：
+    气象数据遵循极端的长尾分布（大量零值/弱降水，极少量强降水）。
+    标准 MSE 会被占据主导地位的零值“淹没”，导致模型倾向于预测平滑的低值。
+    
+    改进策略：
+    引入“阶梯式加权”（Aggressive Weighting），根据 Target 的物理强度
+    动态调整梯度权重，强迫模型关注稀有但高危的极端天气事件。
     """
     def __init__(self):
         super().__init__()
-        # 定义阈值 (mm) -> Log Space
-        self.thresh_light = mm_to_lognorm(0.1)
-        self.thresh_mod   = mm_to_lognorm(2.0)
-        self.thresh_heavy = mm_to_lognorm(5.0)
+        # 定义关键业务阈值 (mm -> Log Space)
+        self.thresh_light = mm_to_lognorm(0.1)  # 小雨
+        self.thresh_mod   = mm_to_lognorm(2.0)  # 中雨
+        self.thresh_heavy = mm_to_lognorm(5.0)  # 大/暴雨
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None, extra_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # 使用 L1 Loss 替代 MSE，对异常值更鲁棒
+        # 使用 L1 Loss 替代 MSE，对异常值更鲁棒，且梯度恒定
         diff = torch.abs(pred - target)
         
-        # 激进权重分配 (Aggressive Weighting)
+        # --- 阶梯式权重分配 ---
         weights = torch.ones_like(target)
+        # 给予强回波极高的关注度 (5x -> 20x -> 50x)
         weights[target >= self.thresh_light] = 5.0   
         weights[target >= self.thresh_mod]   = 20.0  
         weights[target >= self.thresh_heavy] = 50.0  
 
         loss_map = diff * weights
         
-        # 叠加额外权重 (如时间衰减权重)
+        # 叠加额外权重 (如时间衰减权重：越远的时刻越难预测，权重可适当调高)
         if extra_weights is not None:
             loss_map = loss_map * extra_weights
             weights = weights * extra_weights
 
-        # 应用有效区域 Mask
+        # 应用有效区域 Mask (如雷达扫描边界掩码)
         if mask is not None:
             loss_map = loss_map * mask
             weights = weights * mask
 
-        # 归一化：除以权重的总和，保持梯度数值稳定
+        # 归一化：除以权重的总和，保持梯度数值稳定，防止 Loss 随 Batch 内容剧烈波动
         return loss_map.sum() / (weights.sum() + 1e-8)
 
 
 class CSILoss(nn.Module):
     """
-    [结构与指标 Loss]
-    替代了传统的 DiceLoss。直接优化多个阈值下的 CSI (Critical Success Index)，
-    能更好地约束降水区域的形状和拓扑结构。
+    [拓扑结构 Loss - 软化 CSI 指标]
+    
+    科学原理：
+    Dice Loss 或 IoU Loss 的气象学变体。直接优化 Critical Success Index (CSI)，
+    这比像素级回归更能约束降水区域的“形状”和“位置”准确性。
+    
+    改进策略：
+    使用 Sigmoid 温度缩放来近似阶跃函数，使其可微。
     """
     def __init__(self, smooth=1.0):
         super().__init__()
         # 定义关键业务阈值
         thresholds_mm = [0.1, 1.0, 2.0, 5.0, 8.0]
-        # 给予高阈值更高的关注度
+        # 给予高阈值更高的权重
         weights_intensity = [1.0, 1.0, 2.0, 5.0, 10.0] 
         
         self.register_buffer('thresholds', torch.tensor([mm_to_lognorm(t) for t in thresholds_mm]))
@@ -87,6 +102,7 @@ class CSILoss(nn.Module):
         for i, thresh in enumerate(self.thresholds):
             w = self.intensity_weights[i]
             # 软 CSI 计算 (Differentiable approximation)
+            # pred > thresh => sigmoid((pred - thresh) * T) -> 1.0
             pred_score = torch.sigmoid((pred - thresh) * self.temperature)
             target_score = (target > thresh).float()
             
@@ -107,9 +123,11 @@ class CSILoss(nn.Module):
 
 class SpectralLoss(nn.Module):
     """
-    [纹理与频域 Loss]
-    在频域 (FFT) 约束预测结果。这对于防止预测图像模糊 (Blurring) 至关重要，
-    迫使模型生成合理的高频纹理细节。
+    [频域纹理 Loss - FFT]
+    
+    科学原理：
+    基于 MSE 的模型倾向于生成模糊的图像（平均效应），导致高频信息（纹理细节）丢失。
+    在频域约束幅度谱，迫使模型生成具有合理高频分量的预测结果。
     """
     def __init__(self):
         super().__init__()
@@ -120,49 +138,62 @@ class SpectralLoss(nn.Module):
             target = target * mask
 
         # 2D 实数 FFT 变换
+        # norm='ortho' 保证能量守恒
         fft_pred = torch.fft.rfft2(pred, dim=(-2, -1), norm='ortho')
         fft_target = torch.fft.rfft2(target, dim=(-2, -1), norm='ortho')
 
-        # 幅度 Loss (L1): 约束频谱能量分布
+        # 幅度谱 Loss (L1)
         amp_pred = torch.abs(fft_pred)
         amp_target = torch.abs(fft_target)
         loss_amp = F.l1_loss(amp_pred, amp_target)
         
-        # (可选) 相位/相关性 Loss 可以在此添加，但仅幅度通常已足够
         return loss_amp
 
 
 class PhysicsConstraintsLoss(nn.Module):
     """
-    [物理约束 Loss]
+    [物理约束 Loss - 非对称改进版]
+    
     包含两个子约束：
-    1. 局部质量守恒 (Local Conservation): 防止大范围弱降水欺骗全局 Sum。
-    2. 光流一致性 (Optical Flow/Consistency): 约束运动平滑性。
+    1. 非对称局部质量守恒 (Asymmetric Local Conservation): 
+       防止模型通过降低总降水量来规避风险。
+       对于“漏报爆发”（Under-prediction）给予比“虚报”更重的惩罚。
+    2. 光流一致性 (Optical Flow/Consistency): 
+       约束运动的平滑性，符合流体动力学特性。
     """
-    def __init__(self, pool_size=4):
+    def __init__(self, pool_size=4, under_penalty=2.0):
         super().__init__()
         self.pool_size = pool_size
+        self.under_penalty = under_penalty # 漏报惩罚系数
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        # --- 1. 局部质量守恒约束 (改进) ---
-        # 使用 AvgPool 将图像分块，约束每个局部块内的降水总量
+        # --- 1. 局部质量守恒约束 (非对称版) ---
         if mask is not None:
             pred = pred * mask
             target = target * mask
             
-        # [修改] 全局 Sum -> 局部 Avg (等价于局部 Sum 约束)
-        # Input: [B, T, H, W] -> [B*T, 1, H, W] for pooling
+        # Reshape for pooling: [B, T, H, W] -> [B*T, 1, H, W]
         b, t, h, w = pred.shape
         p_reshaped = pred.view(b * t, 1, h, w)
         t_reshaped = target.view(b * t, 1, h, w)
         
-        # 计算局部平均 (Local Average)
+        # 计算局部平均 (Local Average)，模拟降水通量
         p_local = F.avg_pool2d(p_reshaped, kernel_size=self.pool_size, stride=self.pool_size)
         t_local = F.avg_pool2d(t_reshaped, kernel_size=self.pool_size, stride=self.pool_size)
         
-        loss_cons = F.l1_loss(p_local, t_local)
+        # 计算差异: 预测 - 真实
+        diff = p_local - t_local
         
-        # --- 2. 变化率/光流一致性约束 (保持不变) ---
+        # [核心改进] 非对称权重逻辑
+        # 当 diff < 0 (预测 < 真实，即漏报了强度/增长) 时，施加额外惩罚 (under_penalty)。
+        # 这迫使模型在面对不确定性时，倾向于保留更强的回波（Better safe than sorry），
+        # 而非保守地平滑掉，从而缓解"初生对流被忽略"的问题。
+        weight_map = torch.where(diff < 0, self.under_penalty, 1.0)
+        
+        loss_cons = (torch.abs(diff) * weight_map).mean()
+        
+        # --- 2. 变化率/光流一致性约束 ---
+        # 约束时间差分的一致性，减少闪烁
         p_diff = pred[:, 1:] - pred[:, :-1]
         t_diff = target[:, 1:] - target[:, :-1]
         loss_flow = F.l1_loss(p_diff, t_diff)
@@ -193,7 +224,8 @@ class HybridLoss(nn.Module):
         self.loss_mse = BalancedMSELoss()
         self.loss_csi = CSILoss()
         self.loss_spectral = SpectralLoss()
-        self.loss_physics = PhysicsConstraintsLoss()
+        # [修改] 启用非对称物理约束，惩罚系数设为 2.0
+        self.loss_physics = PhysicsConstraintsLoss(under_penalty=2.0)
         
         # 2. 定义可学习参数 (Learnable Weights)
         # s 代表 log(variance)。初始化为 0 意味着初始方差为 1，初始权重为 0.5。
@@ -212,7 +244,7 @@ class HybridLoss(nn.Module):
         extra_weights = None
         if self.use_temporal_weight:
             T = pred.shape[1]
-            # 线性增加权重 (1.0 -> 2.0)，越远的时刻越重要
+            # 线性增加权重 (1.0 -> 2.0)，越远的时刻预测越难，但业务上同样重要
             extra_weights = torch.linspace(1.0, 2.0, steps=T, device=pred.device).view(1, T, 1, 1)
 
         # 2. 计算各项原始 Loss (Raw Values)
@@ -230,7 +262,7 @@ class HybridLoss(nn.Module):
         # precision: 相当于权重 (1 / sigma^2)
         precision = torch.exp(-s)
         
-        # 贝叶斯损失公式: L = 0.5 * (precision * raw_loss + log_variance)
+        # 贝叶斯多任务损失公式: L = 0.5 * (precision * raw_loss + log_variance)
         weighted_losses = 0.5 * (precision * losses + s)
         
         total_loss = weighted_losses.sum()
@@ -238,7 +270,7 @@ class HybridLoss(nn.Module):
         # 4. 构建返回字典 (用于监控)
         loss_dict = {
             'total': total_loss,
-            # --- 原始 Loss (用于观察物理指标) ---
+            # --- 原始 Loss (用于观察物理指标绝对值) ---
             'mse_raw': l_mse.detach(),
             'csi_raw': l_csi.detach(),
             'spec_raw': l_spec.detach(),

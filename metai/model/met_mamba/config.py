@@ -11,6 +11,7 @@ class ModelConfig(BaseModel):
     1. 自动加权 Loss (Kendall's Weighting)
     2. 物理约束 (Physics Constraints)
     3. 稀疏计算 (Sparse Computation)
+    4. [新增] 模糊度课程学习 (Blurring Curriculum)
     """
     
     # =========================================================
@@ -40,10 +41,7 @@ class ModelConfig(BaseModel):
     mamba_expand: int = 2
     use_checkpoint: bool = True
     
-    # [新增] 稀疏计算率 (Sparse Ratio)
-    # 控制 Mamba 层的 Token 剪枝比例。
-    # 0.0 = 关闭稀疏 (稠密计算)
-    # 0.5 = 剪枝 50% (加速计算，仅保留高激活 Token)
+    # 稀疏计算率 (Sparse Ratio)
     mamba_sparse_ratio: float = 0.5 
     
     # =========================================================
@@ -67,13 +65,23 @@ class ModelConfig(BaseModel):
     decay_rate: float = 0.1
     
     # =========================================================
-    # 5. 高级策略配置
+    # 5. 高级策略配置 (Advanced Strategies)
     # =========================================================
-    # 课程学习：这对稳定光流 (Advective Projection) 至关重要
+    # 课程学习：启用序列长度和模糊度课程
     use_curriculum_learning: bool = True 
+    
+    # [新增] 模糊度课程参数
+    # 初始最大高斯模糊半径 (sigma)，随着训练衰减
+    blur_sigma_max: float = 2.0 
+    # 应用模糊课程的 Epoch 数量 (例如前20个Epoch)
+    blur_epochs: int = 20 
     
     # 时间权重：配合自动加权 Loss 使用
     use_temporal_weight: bool = True
+    
+    # [新增] 物理约束参数
+    # 漏报强度的惩罚系数 (非对称 Loss)
+    cons_under_penalty: float = 2.0 
     
     model_config = ConfigDict(protected_namespaces=())
     
