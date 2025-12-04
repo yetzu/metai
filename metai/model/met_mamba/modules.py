@@ -114,7 +114,7 @@ class LearnableSparseHandler(nn.Module):
        在 Forward 阶段使用硬截断 (Top-K) 提取特征;
        在 Backward 阶段通过重参数化技巧允许梯度流回 Score 网络。
        
-    这解决了传统 Top-K 操作不可导导致的模型无法自主学习“关注点”的问题。
+    [v2.1 改进]: 引入噪声注入 (Noise Injection) 和 Clean Gradient Scaling 以增强训练稳定性。
     """
     def __init__(self, dim, sparse_ratio=0.5):
         super().__init__()
@@ -127,6 +127,10 @@ class LearnableSparseHandler(nn.Module):
             nn.LeakyReLU(inplace=True),
             nn.Conv2d(dim // 4, 1, kernel_size=1)
         )
+        
+        # [新增] 注册一个极小的扰动系数，防止除零错误和打破平局
+        self.register_buffer('noise_scale', torch.tensor(0.01))
+        
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -155,12 +159,20 @@ class LearnableSparseHandler(nn.Module):
         scores_map = torch.sigmoid(self.router(x_mean)) 
         scores_flat = scores_map.view(B, N_spatial)
         
+        # [增强稳定性 1] 训练阶段注入随机噪声 (Noise Injection)
+        # 这有助于打破早期训练的对称性，避免 Router 坍缩到固定点
+        if self.training:
+            noise = torch.randn_like(scores_flat) * self.noise_scale
+            scores_flat_noisy = scores_flat + noise
+        else:
+            scores_flat_noisy = scores_flat
+        
         # 2. 确定保留数量 K
         keep_k = max(1, int(N_spatial * (1.0 - self.sparse_ratio)))
         
         # 3. Top-K 选择 (Forward Pass)
-        # 获取 Top-K 的分数和索引
-        top_scores, top_indices = torch.topk(scores_flat, k=keep_k, dim=1)
+        # 使用加噪后的分数进行排序
+        top_scores, top_indices = torch.topk(scores_flat_noisy, k=keep_k, dim=1)
         
         # 排序索引以保持空间相对顺序 (这对某些位置敏感的操作有帮助)
         top_indices, _ = torch.sort(top_indices, dim=1) # [B, K]
@@ -176,9 +188,11 @@ class LearnableSparseHandler(nn.Module):
         x_gathered = torch.gather(x_flat, 1, idx_expanded)
         
         # 5. [关键] 梯度注入 (Gradient Injection via STE)
-        # 重新获取对应位置的 Score，并扩展维度
-        # 注意：这里需要重新 gather score 以保证顺序一致
-        score_gathered = torch.gather(
+        # [增强稳定性 2] 使用原始(无噪)的 score 计算梯度权重
+        # 确保梯度流向真实的 Router 输出，而不是拟合噪声
+        
+        # 重新获取对应位置的 原始 Score，并扩展维度
+        score_gathered_clean = torch.gather(
             scores_flat.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T, C), 
             1, idx_expanded
         )
@@ -187,7 +201,11 @@ class LearnableSparseHandler(nn.Module):
         # Forward: x_sparse = x_gathered * 1.0 (数值不变)
         # Backward: x_sparse = x_gathered * score (梯度流经 score)
         # 实现方式: x * (s / s.detach())
-        x_sparse = x_gathered * (score_gathered / (score_gathered.detach() + 1e-6))
+        # 加入 eps 防止数值不稳定
+        eps = 1e-6
+        scale_factor = score_gathered_clean / (score_gathered_clean.detach() + eps)
+        
+        x_sparse = x_gathered * scale_factor
         
         return x_sparse, top_indices, (B, T, C, H, W)
 
@@ -471,8 +489,15 @@ class AdvectiveProjection(nn.Module):
             flow_field = flow_delta.permute(0, 2, 3, 1)
             grid = base_grid + flow_field
             
-            # 使用 'zeros' 填充，避免边界产生虚假回波
-            next_z = F.grid_sample(curr_z, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
+            # [修复] 统一物理边界条件: 'reflection'
+            # 之前的 'zeros' 会导致移出边界的云团被截断，与 Loss 中的 reflection 不一致
+            next_z = F.grid_sample(
+                curr_z, 
+                grid, 
+                mode='bilinear', 
+                padding_mode='reflection',  # <--- 修改点
+                align_corners=False
+            )
             
             curr_z = next_z
             preds.append(curr_z)
