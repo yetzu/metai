@@ -67,6 +67,8 @@ class ModelConfig(BaseModel):
     weight_dice: float = 1.0      # 抗坍塌核心
     weight_csi: float = 1.0       # 指标优化核心
     weight_gdl: float = 1.0       # 基础锐化核心
+    weight_cons: float = 0.1      # 质量守恒权重 (建议小一点，防止伪影)
+    weight_flow: float = 0.5      # 光流一致性权重 (建议适中，引导运动)
     
     # [可选 Loss]
     weight_msssim: float = 0.1    # 【推荐】结构维持，权重给小一点 (0.1)

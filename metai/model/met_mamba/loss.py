@@ -4,15 +4,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from typing import Optional, List, Dict, Tuple
-from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
-import lpips
+from typing import Optional, Dict, Tuple
 
 # ==============================================================================
-# 常量与工具
+# 工具函数 & 常量
 # ==============================================================================
 
 # 物理参数：必须与 Dataset 的归一化逻辑严格一致
+# 假设最大降水为 30mm/h，用于对数归一化反算
 MM_MAX = 30.0  
 LOG_NORM_FACTOR = math.log(MM_MAX + 1)
 
@@ -21,177 +20,73 @@ def mm_to_lognorm(mm_val: float) -> float:
     return math.log(mm_val + 1) / LOG_NORM_FACTOR
 
 # ==============================================================================
-# 核心 Loss 组件
+# 核心 Loss 组件 (Atomic Loss Components)
 # ==============================================================================
 
 class BalancedMSELoss(nn.Module):
     """
-    [归一化平衡 MSE]
-    解决 'MSE Dominance' 的关键：
-    通过 weights.sum() 归一化，允许我们使用极大的权重 (如 50x) 来改变梯度方向，
-    而不会导致 Loss 数值爆炸。
+    [强度回归 Loss]
+    针对气象数据的长尾分布设计。保留了激进的权重策略，
+    强迫模型关注稀有但重要的强降水事件。
     """
-    def __init__(self, use_l1=True):
+    def __init__(self):
         super().__init__()
-        self.use_l1 = use_l1
-        
-        # 定义阈值 (mm)
-        self.thresh_light = 0.1
-        self.thresh_mod   = 2.0
-        self.thresh_heavy = 5.0
-        
-        # 预计算 Log 空间阈值
-        self.log_thresh_light = mm_to_lognorm(self.thresh_light)
-        self.log_thresh_mod = mm_to_lognorm(self.thresh_mod)
-        self.log_thresh_heavy = mm_to_lognorm(self.thresh_heavy)
+        # 定义阈值 (mm) -> Log Space
+        self.thresh_light = mm_to_lognorm(0.1)
+        self.thresh_mod   = mm_to_lognorm(2.0)
+        self.thresh_heavy = mm_to_lognorm(5.0)
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None, extra_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if self.use_l1:
-            diff = torch.abs(pred - target)
-        else:
-            diff = (pred - target) ** 2
-
-        # 1. 激进的权重分配 (Aggressive Weighting)
+        # 使用 L1 Loss 替代 MSE，对异常值更鲁棒
+        diff = torch.abs(pred - target)
+        
+        # 激进权重分配 (Aggressive Weighting)
         weights = torch.ones_like(target)
-        weights[target >= self.log_thresh_light] = 5.0   
-        weights[target >= self.log_thresh_mod]   = 20.0  
-        weights[target >= self.log_thresh_heavy] = 50.0  
+        weights[target >= self.thresh_light] = 5.0   
+        weights[target >= self.thresh_mod]   = 20.0  
+        weights[target >= self.thresh_heavy] = 50.0  
 
         loss_map = diff * weights
         
-        # 2. 叠加额外权重 (如时间权重)
+        # 叠加额外权重 (如时间衰减权重)
         if extra_weights is not None:
             loss_map = loss_map * extra_weights
             weights = weights * extra_weights
 
-        # 3. 应用有效区域 Mask
+        # 应用有效区域 Mask
         if mask is not None:
             loss_map = loss_map * mask
             weights = weights * mask
 
-        # 4. [关键] 归一化：除以权重的总和
+        # 归一化：除以权重的总和，保持梯度数值稳定
         return loss_map.sum() / (weights.sum() + 1e-8)
-
-
-class DiceLoss(nn.Module):
-    """
-    [降水 Dice Loss]
-    解决 'Zero Collapse' 的关键：
-    将回归问题转化为二分类 (有雨/无雨) 问题。
-    """
-    def __init__(self, smooth=1.0):
-        super().__init__()
-        self.smooth = smooth
-        self.threshold = mm_to_lognorm(0.1)
-        # Scale=150.0 确保背景(0)的 Sigmoid 输出接近 0，减少噪声
-        self.scale = 150.0 
-
-    def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # 软二值化
-        pred_mask = torch.sigmoid((pred - self.threshold) * self.scale)
-        target_mask = (target > self.threshold).float()
-        
-        if mask is not None:
-            pred_mask = pred_mask * mask
-            target_mask = target_mask * mask
-            
-        intersection = (pred_mask * target_mask).sum()
-        union = pred_mask.sum() + target_mask.sum()
-        
-        dice = (2. * intersection + self.smooth) / (union + self.smooth)
-        return 1.0 - dice
-
-
-class GradientDifferenceLoss(nn.Module):
-    """
-    [梯度差分损失]
-    保持边缘锐度。
-    """
-    def __init__(self, alpha=1.0):
-        super().__init__()
-        self.alpha = alpha
-
-    def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # 空间梯度
-        p_dy = torch.abs(pred[..., 1:, :] - pred[..., :-1, :])
-        p_dx = torch.abs(pred[..., :, 1:] - pred[..., :, :-1])
-        t_dy = torch.abs(target[..., 1:, :] - target[..., :-1, :])
-        t_dx = torch.abs(target[..., :, 1:] - target[..., :, :-1])
-
-        diff_dy = torch.abs(p_dy - t_dy) ** self.alpha
-        diff_dx = torch.abs(p_dx - t_dx) ** self.alpha
-
-        if mask is not None:
-            m_dy = mask[..., 1:, :] * mask[..., :-1, :]
-            m_dx = mask[..., :, 1:] * mask[..., :, :-1]
-            loss_spatial = (diff_dy * m_dy).sum() / (m_dy.sum() + 1e-8) + \
-                           (diff_dx * m_dx).sum() / (m_dx.sum() + 1e-8)
-        else:
-            loss_spatial = diff_dy.mean() + diff_dx.mean()
-
-        return loss_spatial
-
-
-class SpectralLoss(nn.Module):
-    """
-    [频域损失] (FACL)
-    通过 FFT 约束频域幅度和相位，强制模型恢复高频纹理信息。
-    """
-    def __init__(self, loss_type='l2'):
-        super().__init__()
-        self.loss_type = loss_type
-
-    def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if mask is not None:
-            pred = pred * mask
-            target = target * mask
-
-        # 2D FFT (沿空间维度 H, W)
-        fft_pred = torch.fft.rfft2(pred, dim=(-2, -1), norm='ortho')
-        fft_target = torch.fft.rfft2(target, dim=(-2, -1), norm='ortho')
-
-        # 1. 幅度损失 (清晰度)
-        amp_pred = torch.abs(fft_pred)
-        amp_target = torch.abs(fft_target)
-        if self.loss_type == 'l2':
-            loss_amp = F.mse_loss(amp_pred, amp_target)
-        else:
-            loss_amp = F.l1_loss(amp_pred, amp_target)
-
-        # 2. 相关性损失 (结构位置)
-        dot = torch.real(fft_pred * torch.conj(fft_target))
-        norm = amp_pred * amp_target + 1e-8
-        correlation = dot / norm
-        loss_corr = 1.0 - torch.mean(correlation)
-
-        return loss_amp + 0.5 * loss_corr
 
 
 class CSILoss(nn.Module):
     """
-    [软 CSI 评分损失]
-    直接优化竞赛指标。
+    [结构与指标 Loss]
+    替代了传统的 DiceLoss。直接优化多个阈值下的 CSI (Critical Success Index)，
+    能更好地约束降水区域的形状和拓扑结构。
     """
     def __init__(self, smooth=1.0):
         super().__init__()
+        # 定义关键业务阈值
         thresholds_mm = [0.1, 1.0, 2.0, 5.0, 8.0]
+        # 给予高阈值更高的关注度
         weights_intensity = [1.0, 1.0, 2.0, 5.0, 10.0] 
         
         self.register_buffer('thresholds', torch.tensor([mm_to_lognorm(t) for t in thresholds_mm]))
         self.register_buffer('intensity_weights', torch.tensor(weights_intensity))
         self.smooth = smooth
-        self.temperature = 50.0
+        self.temperature = 50.0 # 控制 Sigmoid 的陡峭程度，越大越接近阶跃函数
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if pred.dim() == 5: pred = pred.squeeze(2)
-        if target.dim() == 5: target = target.squeeze(2)
-        if mask is not None and mask.dim() == 5: mask = mask.squeeze(2)
-
         total_loss = 0.0
         total_w = 0.0
-
+        
         for i, thresh in enumerate(self.thresholds):
             w = self.intensity_weights[i]
+            # 软 CSI 计算 (Differentiable approximation)
             pred_score = torch.sigmoid((pred - thresh) * self.temperature)
             target_score = (target > thresh).float()
             
@@ -203,64 +98,102 @@ class CSILoss(nn.Module):
             union = pred_score.sum(dim=(-2, -1)) + target_score.sum(dim=(-2, -1)) - intersection
             
             csi = (intersection + self.smooth) / (union + self.smooth)
+            # Loss = (1 - CSI) * weight
             total_loss += (1.0 - csi).mean() * w
             total_w += w
             
         return total_loss / (total_w + 1e-8)
 
 
+class SpectralLoss(nn.Module):
+    """
+    [纹理与频域 Loss]
+    在频域 (FFT) 约束预测结果。这对于防止预测图像模糊 (Blurring) 至关重要，
+    迫使模型生成合理的高频纹理细节。
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if mask is not None:
+            pred = pred * mask
+            target = target * mask
+
+        # 2D 实数 FFT 变换
+        fft_pred = torch.fft.rfft2(pred, dim=(-2, -1), norm='ortho')
+        fft_target = torch.fft.rfft2(target, dim=(-2, -1), norm='ortho')
+
+        # 幅度 Loss (L1): 约束频谱能量分布
+        amp_pred = torch.abs(fft_pred)
+        amp_target = torch.abs(fft_target)
+        loss_amp = F.l1_loss(amp_pred, amp_target)
+        
+        # (可选) 相位/相关性 Loss 可以在此添加，但仅幅度通常已足够
+        return loss_amp
+
+
+class PhysicsConstraintsLoss(nn.Module):
+    """
+    [物理约束 Loss]
+    包含两个子约束：
+    1. 质量守恒 (Conservation): 防止强回波凭空消失。
+    2. 光流一致性 (Optical Flow/Consistency): 约束运动平滑性。
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        # --- 1. 质量守恒约束 ---
+        if mask is not None:
+            # 计算局部/全局区域内的总量
+            p_sum = (pred * mask).sum(dim=(-2, -1))
+            t_sum = (target * mask).sum(dim=(-2, -1))
+        else:
+            p_sum = pred.sum(dim=(-2, -1))
+            t_sum = target.sum(dim=(-2, -1))
+        # 要求预测的总降水量趋势与真实值一致
+        loss_cons = F.l1_loss(p_sum, t_sum)
+        
+        # --- 2. 变化率/光流一致性约束 ---
+        # 简化的光流约束：Temporal Derivative Consistency
+        # 要求预测场的时间变化率 (dI/dt) 与真实场一致
+        p_diff = pred[:, 1:] - pred[:, :-1]
+        t_diff = target[:, 1:] - target[:, :-1]
+        loss_flow = F.l1_loss(p_diff, t_diff)
+        
+        return loss_cons, loss_flow
+
+# ==============================================================================
+# 智能混合 Loss (Automatic Weighted Hybrid Loss)
+# ==============================================================================
+
 class HybridLoss(nn.Module):
     """
-    [混合损失函数 - 终极版]
-    全程启用所有 Loss，仅保留 Trainer 层面的序列长度课程学习。
+    [智能混合损失 - 最终版]
+    基于 Kendall's Multi-Task Learning (CVPR 2018) 策略。
+    
+    自动学习 5 个不同 Loss 分量的权重，解决梯度冲突和超参调节难题。
+    公式: Total_Loss = Sum( 0.5 * exp(-s) * Loss + 0.5 * s )
+    其中 s = log(sigma^2) 是可学习的不确定性参数。
     """
     def __init__(self, 
-                 weight_bal_mse: float = 1.0, 
-                 weight_dice: float = 1.0,    
-                 weight_csi: float = 1.0, 
-                 weight_gdl: float = 1.0,      
-                 weight_facl: float = 0.0,    
-                 weight_msssim: float = 0.0,   
-                 weight_lpips: float = 0.0,
-                 use_curriculum: bool = False, 
                  use_temporal_weight: bool = True,
-                 **kwargs):
+                 **kwargs): 
+        # kwargs 用于接收 config 中的旧参数并安全忽略，保持接口兼容
         super().__init__()
-        
-        self.weights = {
-            'bal_mse': weight_bal_mse, 
-            'dice': weight_dice,
-            'csi': weight_csi, 
-            'gdl': weight_gdl, 
-            'facl': weight_facl,
-            'msssim': weight_msssim,
-            'lpips': weight_lpips
-        }
-        
         self.use_temporal_weight = use_temporal_weight
         
-        # 初始化子 Loss
-        self.loss_bal_mse = BalancedMSELoss(use_l1=True)
-        self.loss_dice = DiceLoss() 
+        # 1. 初始化各子 Loss
+        self.loss_mse = BalancedMSELoss()
         self.loss_csi = CSILoss()
-        self.loss_gdl = GradientDifferenceLoss()
+        self.loss_spectral = SpectralLoss()
+        self.loss_physics = PhysicsConstraintsLoss()
         
-        # 可选 Loss (现在 SpectralLoss 已定义，可以直接使用)
-        self.loss_facl = None
-        if weight_facl > 0: 
-            self.loss_facl = SpectralLoss()  # [Fixed] 直接实例化，无需 import
-            
-        self.loss_msssim = None
-        if weight_msssim > 0:
-             self.loss_msssim = MultiScaleStructuralSimilarityIndexMeasure(
-                data_range=1.0, kernel_size=11, reduction='elementwise_mean'
-            )
+        # 2. 定义可学习参数 (Learnable Weights)
+        # s 代表 log(variance)。初始化为 0 意味着初始方差为 1，初始权重为 0.5。
+        # 形状为 5，分别对应: [MSE, CSI, Spectral, Conservation, Flow]
+        self.params = nn.Parameter(torch.zeros(5)) 
         
-        self.loss_lpips = None
-        if weight_lpips > 0:
-            self.loss_lpips = lpips.LPIPS(net='vgg').eval()
-            self.loss_lpips.requires_grad_(False)
-
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None, 
                 current_epoch: int = 100, total_epochs: int = 100) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         
@@ -268,54 +201,53 @@ class HybridLoss(nn.Module):
         if pred.ndim == 5: pred = pred.squeeze(2)
         if target.ndim == 5: target = target.squeeze(2)
         if mask is not None and mask.ndim == 5: mask = mask.squeeze(2)
-        
-        # 1. 时间权重计算
+
+        # 1. 准备时间权重 (仅增强 MSE)
         extra_weights = None
         if self.use_temporal_weight:
             T = pred.shape[1]
-            t_w = torch.linspace(1.0, 2.0, steps=T, device=pred.device).view(1, T, 1, 1)
-            extra_weights = t_w
+            # 线性增加权重 (1.0 -> 2.0)，越远的时刻越重要
+            extra_weights = torch.linspace(1.0, 2.0, steps=T, device=pred.device).view(1, T, 1, 1)
 
-        # 2. 计算基础 Loss
-        l_mse = self.loss_bal_mse(pred, target, mask, extra_weights)
-        l_dice = self.loss_dice(pred, target, mask)
+        # 2. 计算各项原始 Loss (Raw Values)
+        l_mse = self.loss_mse(pred, target, mask, extra_weights)
         l_csi = self.loss_csi(pred, target, mask)
-        l_gdl = self.loss_gdl(pred, target, mask)
+        l_spec = self.loss_spectral(pred, target, mask)
+        l_cons, l_flow = self.loss_physics(pred, target, mask)
         
-        # 3. 计算可选 Loss
-        l_facl = torch.tensor(0.0, device=pred.device)
-        l_msssim = torch.tensor(0.0, device=pred.device)
-        l_lpips = torch.tensor(0.0, device=pred.device)
-
-        if self.loss_facl is not None:
-            l_facl = self.loss_facl(pred, target, mask)
-            
-        if self.loss_msssim is not None:
-             B, T, H, W = pred.shape
-             l_msssim = 1.0 - self.loss_msssim(pred.view(-1, 1, H, W), target.view(-1, 1, H, W))
-
-        if self.loss_lpips is not None:
-             p_rgb = pred[:, -1:].repeat(1, 3, 1, 1) * 2 - 1 
-             t_rgb = target[:, -1:].repeat(1, 3, 1, 1) * 2 - 1
-             l_lpips = self.loss_lpips(p_rgb, t_rgb).mean()
-
-        # 4. 加权求和
-        total = (self.weights['bal_mse'] * l_mse + 
-                 self.weights['dice'] * l_dice + 
-                 self.weights['csi'] * l_csi + 
-                 self.weights['gdl'] * l_gdl + 
-                 self.weights['facl'] * l_facl + 
-                 self.weights['msssim'] * l_msssim + 
-                 self.weights['lpips'] * l_lpips)
+        # 将所有 Loss 堆叠: [5]
+        losses = torch.stack([l_mse, l_csi, l_spec, l_cons, l_flow])
         
+        # 3. 自动加权计算 (Automatic Weighting)
+        # s: 可学习的不确定性参数
+        s = self.params
+        # precision: 相当于权重 (1 / sigma^2)
+        precision = torch.exp(-s)
+        
+        # 贝叶斯损失公式: L = 0.5 * (precision * raw_loss + log_variance)
+        weighted_losses = 0.5 * (precision * losses + s)
+        
+        total_loss = weighted_losses.sum()
+        
+        # 4. 构建返回字典 (用于监控)
         loss_dict = {
-            'total': total, 
-            'bal_mse': l_mse, 
-            'dice': l_dice,
-            'csi': l_csi, 
-            'gdl': l_gdl,
-            'facl': l_facl,
-            'msssim': l_msssim
+            'total': total_loss,
+            # --- 原始 Loss (用于观察物理指标) ---
+            'mse_raw': l_mse.detach(),
+            'csi_raw': l_csi.detach(),
+            'spec_raw': l_spec.detach(),
+            'cons_raw': l_cons.detach(),
+            'flow_raw': l_flow.detach(),
+            # --- 学习到的实际权重 (0.5 * exp(-s)) ---
+            # 观察这些值的变化可以看出模型当前关注哪些任务
+            'w_mse': 0.5 * precision[0].detach(),
+            'w_csi': 0.5 * precision[1].detach(),
+            'w_spec': 0.5 * precision[2].detach(),
+            'w_cons': 0.5 * precision[3].detach(),
+            'w_flow': 0.5 * precision[4].detach(),
+            # --- 不确定性参数 s ---
+            's_mse': s[0].detach(),
+            's_csi': s[1].detach()
         }
         
-        return total, loss_dict
+        return total_loss, loss_dict
