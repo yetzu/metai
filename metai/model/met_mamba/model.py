@@ -8,7 +8,8 @@ from .modules import (
     ConvSC, 
     ResizeConv, 
     STMambaBlock, 
-    TimeAlignBlock
+    TimeAlignBlock,
+    AdvectiveProjection  # [新增] 引入显式平流投影层
 )
 
 def sampling_generator(N, reverse=False):
@@ -189,7 +190,7 @@ class EvolutionNet(nn.Module):
 class MeteoMamba(nn.Module):
     """
     MeteoMamba 主模型类
-    整体架构：Encoder -> EvolutionNet (Latent Space) -> Time Projection -> Decoder
+    整体架构：Encoder -> EvolutionNet (Latent Space) -> Advective Time Projection -> Decoder
     """
     def __init__(self, 
                  in_shape,      # 输入形状 (C, H, W)
@@ -236,12 +237,13 @@ class MeteoMamba(nn.Module):
             input_resolution=evo_res
         )
         
-        # 3. 潜在时间投影层 (Latent Time Projection)
-        # 逻辑：将 B, H, W 视为 Batch 维度，仅在 T 维度上进行变换 T_in -> T_out
-        self.latent_time_proj = nn.Sequential(
-            nn.Conv1d(T_in, self.T_out, kernel_size=1),
-            nn.Conv1d(self.T_out, self.T_out, kernel_size=1), 
-            nn.SiLU()
+        # 3. [修改] 显式平流时间投影层 (Advective Time Projection)
+        # 替代原有的 Conv1d 投影。
+        # 这里的 dim 对应 Encoder 的输出通道数 hid_S
+        self.latent_time_proj = AdvectiveProjection(
+            dim=hid_S, 
+            t_in=T_in, 
+            t_out=self.T_out
         )
         
         # 4. 初始化解码器
@@ -250,14 +252,7 @@ class MeteoMamba(nn.Module):
         # 5. 跳跃连接投影层 (用于对齐 Encoder 特征的时间维度)
         self.skip_proj = TimeAlignBlock(T_in, self.T_out, hid_S)
         
-        self._init_time_proj()
-
-    def _init_time_proj(self):
-        """初始化时间投影层的权重"""
-        for m in self.latent_time_proj.modules():
-            if isinstance(m, nn.Conv1d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None: nn.init.constant_(m.bias, 0)
+        # 注：AdvectiveProjection 内部已处理初始化，无需额外的 _init_time_proj
 
     def forward(self, x_raw):
         # x_raw 输入形状: [B, T_in, C_in, H, W]
@@ -275,14 +270,14 @@ class MeteoMamba(nn.Module):
         z = embed.view(B, T_in, C_hid, H_, W_)
         z = self.evolution(z)
         
-        # 3. 时间投影阶段 (Time Projection)
-        # 将输入序列长度 T_in 映射到 预测序列长度 T_out
-        # Reshape: [B, T_in, Features] 其中 Features = C*H*W
-        # Conv1d 作用于 Dim 1 (T_in)，Kernel 在 Features (Dim 2) 上滑动
-        # 使用 kernel=1 确保每个空间位置(Pixel)的时间序列是独立演变的，互不干扰
-        z = z.reshape(B, T_in, -1) 
+        # 3. [修改] 时间投影阶段 (Time Projection)
+        # 使用 AdvectiveProjection 进行流引导的特征变换
+        # 输入: [B, T_in, C_hid, H_, W_]
+        # 输出: [B, T_out, C_hid, H_, W_]
         z = self.latent_time_proj(z) 
-        z = z.reshape(B * self.T_out, C_hid, H_, W_)
+        
+        # 重塑为 Decoder 需要的格式: [B*T_out, C_hid, H_, W_]
+        z = z.view(B * self.T_out, C_hid, H_, W_)
         
         # 4. 处理跳跃连接 (Skip Connection)
         # 将 Encoder 的浅层特征的时间维度也从 T_in 投影到 T_out
@@ -292,7 +287,7 @@ class MeteoMamba(nn.Module):
         
         # 5. 解码阶段 (Decoder)
         # 结合演变后的特征和跳跃连接，恢复空间分辨率
-        # Y_diff: [B, T_out, C_out, H, W]
+        # Y_diff: [B*T_out, C_out, H, W] -> [B, T_out, C_out, H, W]
         Y_diff = self.dec(z, skip_out)
         Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         

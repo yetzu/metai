@@ -189,6 +189,154 @@ class TimeAlignBlock(nn.Module):
         return x
 
 # ==========================================
+# 增强型时间投影组件 (Advanced Temporal Projection)
+# ==========================================
+
+class FlowGenerator(nn.Module):
+    """
+    [运动估计器]
+    用于预测特征层的光流场 (Optical Flow Field)。
+    """
+    def __init__(self, in_channels, hidden_dim):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, hidden_dim, 3, 1, 1),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(hidden_dim, hidden_dim, 3, 1, 1),
+            nn.SiLU(inplace=True),
+            # 输出 2 个通道 (dx, dy) 代表位移向量
+            nn.Conv2d(hidden_dim, 2, 3, 1, 1) 
+        )
+        # 初始化流场预测为 0，让训练从"静止"开始，有助于模型冷启动
+        nn.init.constant_(self.conv[-1].weight, 0)
+        nn.init.constant_(self.conv[-1].bias, 0)
+
+    def forward(self, x):
+        return self.conv(x)
+
+def warp(x, flow):
+    """
+    [可微重采样 Warping]
+    使用预测的光流场对特征图进行空间扭曲。
+    
+    Args:
+        x: 输入特征图 [B, C, H, W]
+        flow: 位移场 [B, 2, H, W]
+    """
+    B, C, H, W = x.shape
+    # 生成基础网格
+    xx = torch.arange(0, W).view(1, -1).repeat(H, 1)
+    yy = torch.arange(0, H).view(-1, 1).repeat(1, W)
+    xx = xx.view(1, 1, H, W).repeat(B, 1, 1, 1)
+    yy = yy.view(1, 1, H, W).repeat(B, 1, 1, 1)
+    grid = torch.cat((xx, yy), 1).float().to(x.device)
+    
+    # 加上预测的位移 flow
+    vgrid = grid + flow
+    
+    # 归一化到 [-1, 1] 供 grid_sample 使用
+    vgrid[:, 0, :, :] = 2.0 * vgrid[:, 0, :, :] / max(W - 1, 1) - 1.0
+    vgrid[:, 1, :, :] = 2.0 * vgrid[:, 1, :, :] / max(H - 1, 1) - 1.0
+    
+    vgrid = vgrid.permute(0, 2, 3, 1) # [B, H, W, 2]
+    
+    # 使用 border 模式以减少边界伪影，reflection 模式有时会产生奇怪的镜像
+    output = F.grid_sample(x, vgrid, mode='bilinear', padding_mode='border', align_corners=True)
+    return output
+
+class AdvectiveProjection(nn.Module):
+    """
+    [显式平流投影层] (Advective Projection Layer)
+    替代原有的简单 latent_time_proj。
+    核心思想：结合 "Advection (Warp/平流)" 和 "Diffusion (Conv3d/演变)"。
+    
+    1. Motion Branch: 预测流场，显式移动特征 (位置预测)。
+    2. Evolution Branch: 使用 3D 卷积处理强度变化和生消 (强度预测)。
+    """
+    def __init__(self, dim, t_in, t_out):
+        super().__init__()
+        self.t_in = t_in
+        self.t_out = t_out
+        self.dim = dim
+        
+        # 1. 运动预测分支 (Motion Branch)
+        # 输入所有历史帧特征的聚合，预测未来的流场
+        self.motion_encoder = nn.Sequential(
+            nn.Conv2d(dim * t_in, dim, 1), # 压缩时间维
+            nn.SiLU(inplace=True),
+            FlowGenerator(dim, dim // 2)   # 预测基准流场
+        )
+        
+        # 2. 演变修正分支 (Evolution Branch)
+        # 负责处理云团的"生消" (Intensity Change) 和修正 Warp 带来的瑕疵
+        self.evolution_net = nn.Sequential(
+            nn.Conv3d(dim, dim, kernel_size=3, padding=1),
+            nn.GroupNorm(4, dim),
+            nn.SiLU(inplace=True),
+            nn.Conv3d(dim, dim, kernel_size=3, padding=1),
+            nn.GroupNorm(4, dim),
+            nn.SiLU(inplace=True)
+        )
+        
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, (nn.Conv2d, nn.Conv3d, nn.Linear)):
+            trunc_normal_(m.weight, std=.02)
+            if m.bias is not None: nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        # x: [B, T_in, C, H, W]
+        B, T_in, C, H, W = x.shape
+        
+        # --- A. 运动预测 (Motion) ---
+        # 将历史帧在通道维度拼接: [B, T_in*C, H, W]
+        x_flat = x.view(B, T_in * C, H, W)
+        # 预测一个基准流场 flow_base: [B, 2, H, W]
+        # 假设这个流场代表 t -> t+1 的单位位移
+        flow_base = self.motion_encoder(x_flat)
+        
+        # --- B. 循环推演 (Recurrent/Iterative Warping) ---
+        # 我们使用最后时刻的特征 x[:, -1] 作为种子，逐步 Warp 到未来
+        curr_feat = x[:, -1] # [B, C, H, W]
+        warped_preds = []
+        
+        for t in range(self.t_out):
+            # 简单的线性假设：累积位移
+            # 进阶版可以使用 GRU 预测每一步不同的 flow，但为了效率这里使用恒定流场假设
+            curr_feat = warp(curr_feat, flow_base)
+            warped_preds.append(curr_feat)
+            
+        # 堆叠 Warp 结果: [B, T_out, C, H, W]
+        x_warped = torch.stack(warped_preds, dim=1)
+        
+        # --- C. 演变修正 (Evolution) ---
+        # 上面的 Warp 只处理了位置移动，形状和强度没变。
+        # 这里用 3D Conv 处理强度的变化 (ResNet 思路)
+        
+        # 准备 3D Conv 输入: [B, C, T_in, H, W]
+        x_evolution = x.permute(0, 2, 1, 3, 4)
+        
+        # 时空插值到 T_out: [B, C, T_out, H, W]
+        if T_in != self.t_out:
+            x_evolution = F.interpolate(
+                x_evolution, 
+                size=(self.t_out, H, W), 
+                mode='trilinear', 
+                align_corners=False
+            )
+        
+        # 计算残差
+        x_resid = self.evolution_net(x_evolution)
+        
+        # 恢复维度 [B, T_out, C, H, W]
+        x_resid = x_resid.permute(0, 2, 1, 3, 4)
+        
+        # --- D. 最终融合 ---
+        # 最终预测 = 平流结果 (位置准) + 演变残差 (强度/形状准)
+        return x_warped + x_resid
+
+# ==========================================
 # 核心 Mamba 模块 (Core Mamba Modules)
 # ==========================================
 
