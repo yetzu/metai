@@ -136,27 +136,33 @@ class PhysicsConstraintsLoss(nn.Module):
     """
     [物理约束 Loss]
     包含两个子约束：
-    1. 质量守恒 (Conservation): 防止强回波凭空消失。
+    1. 局部质量守恒 (Local Conservation): 防止大范围弱降水欺骗全局 Sum。
     2. 光流一致性 (Optical Flow/Consistency): 约束运动平滑性。
     """
-    def __init__(self):
+    def __init__(self, pool_size=4):
         super().__init__()
+        self.pool_size = pool_size
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        # --- 1. 质量守恒约束 ---
+        # --- 1. 局部质量守恒约束 (改进) ---
+        # 使用 AvgPool 将图像分块，约束每个局部块内的降水总量
         if mask is not None:
-            # 计算局部/全局区域内的总量
-            p_sum = (pred * mask).sum(dim=(-2, -1))
-            t_sum = (target * mask).sum(dim=(-2, -1))
-        else:
-            p_sum = pred.sum(dim=(-2, -1))
-            t_sum = target.sum(dim=(-2, -1))
-        # 要求预测的总降水量趋势与真实值一致
-        loss_cons = F.l1_loss(p_sum, t_sum)
+            pred = pred * mask
+            target = target * mask
+            
+        # [修改] 全局 Sum -> 局部 Avg (等价于局部 Sum 约束)
+        # Input: [B, T, H, W] -> [B*T, 1, H, W] for pooling
+        b, t, h, w = pred.shape
+        p_reshaped = pred.view(b * t, 1, h, w)
+        t_reshaped = target.view(b * t, 1, h, w)
         
-        # --- 2. 变化率/光流一致性约束 ---
-        # 简化的光流约束：Temporal Derivative Consistency
-        # 要求预测场的时间变化率 (dI/dt) 与真实场一致
+        # 计算局部平均 (Local Average)
+        p_local = F.avg_pool2d(p_reshaped, kernel_size=self.pool_size, stride=self.pool_size)
+        t_local = F.avg_pool2d(t_reshaped, kernel_size=self.pool_size, stride=self.pool_size)
+        
+        loss_cons = F.l1_loss(p_local, t_local)
+        
+        # --- 2. 变化率/光流一致性约束 (保持不变) ---
         p_diff = pred[:, 1:] - pred[:, :-1]
         t_diff = target[:, 1:] - target[:, :-1]
         loss_flow = F.l1_loss(p_diff, t_diff)

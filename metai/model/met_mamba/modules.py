@@ -147,12 +147,13 @@ class TimeAlignBlock(nn.Module):
 
 class SparseTokenHandler(nn.Module):
     """
-    [稀疏 Token 处理器]
-    实现真正的计算稀疏化：只对 Top-K 的活跃 Token 进行计算。
+    [稀疏 Token 处理器 - 改进版]
+    实现真正的计算稀疏化：对 Top-K 活跃 Token 和部分随机 Token 进行计算。
     """
-    def __init__(self, sparse_ratio=0.5):
+    def __init__(self, sparse_ratio=0.5, random_ratio=0.1):
         super().__init__()
         self.sparse_ratio = sparse_ratio
+        self.random_ratio = random_ratio # 预留给随机采样的比例 (相对于 keep_len)
 
     def sparsify(self, x):
         """
@@ -163,19 +164,58 @@ class SparseTokenHandler(nn.Module):
         # 计算 Token 重要性 (L2 Norm)
         x_norm = x.norm(dim=-1)
         
-        # 确定保留的 Token 数量 K
+        # 确定总保留数量 K
         # 至少保留 1 个 token 避免崩溃
         keep_len = max(1, int(L * (1.0 - self.sparse_ratio)))
         
-        # 获取 Top-K 索引
-        # indices: [B, K]
-        _, indices = torch.topk(x_norm, k=keep_len, dim=1)
+        # [修改] 混合采样策略: Top-K (强信号) + Random (弱信号探查)
+        if self.random_ratio > 0 and keep_len > 1:
+            num_random = int(keep_len * self.random_ratio)
+            num_top = keep_len - num_random
+            num_top = max(1, num_top) # 确保至少有一个 Top
+            num_random = max(0, keep_len - num_top)
+        else:
+            num_top = keep_len
+            num_random = 0
+            
+        # 1. 获取 Top-K 索引 (强信号)
+        _, top_indices = torch.topk(x_norm, k=num_top, dim=1)
+        
+        # 2. 获取随机索引 (弱信号)
+        if num_random > 0:
+            # 创建一个 mask，排除掉已经被选为 top 的 indices
+            mask = torch.ones(B, L, device=x.device, dtype=torch.bool)
+            # scatter 将 top_indices 位置置为 False
+            mask.scatter_(1, top_indices, False)
+            
+            # 从剩余位置中采样
+            # 由于 torch.multinomial 需要 float 概率，我们将 mask 转为 float
+            # 注意：这里对每个样本分别采样
+            rand_indices_list = []
+            for b in range(B):
+                # 获取当前样本剩余的索引
+                remaining_indices = torch.nonzero(mask[b], as_tuple=False).squeeze(-1)
+                if len(remaining_indices) >= num_random:
+                    # 随机选择
+                    perm = torch.randperm(len(remaining_indices), device=x.device)[:num_random]
+                    chosen = remaining_indices[perm]
+                else:
+                    # 如果剩余不够 (极少见)，就全选或补全
+                    chosen = remaining_indices
+                rand_indices_list.append(chosen)
+            
+            rand_indices = torch.stack(rand_indices_list, dim=0)
+            
+            # 合并索引
+            indices = torch.cat([top_indices, rand_indices], dim=1)
+        else:
+            indices = top_indices
         
         # 排序索引，尽量保持原有的相对顺序 (这对 Mamba 的时序性有帮助)
         indices, _ = torch.sort(indices, dim=1)
         
         # Gather 提取 Active Tokens
-        batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, keep_len)
+        batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, indices.shape[1])
         x_sparse = x[batch_indices, indices]
         
         return x_sparse, indices, (B, L, C)
@@ -327,6 +367,7 @@ class STMambaBlock(nn.Module):
         if self.sparse_ratio > 0:
             # 稀疏模式：使用 Sandwich MLP
             self.mlp = SparseLocalityEnhancedMLP(dim, mlp_hidden_dim, dim, act_layer=act_layer, drop=drop)
+            # 使用默认 random_ratio=0.1 进行混合采样
             self.sparse_handler = SparseTokenHandler(sparse_ratio)
         else:
             # 稠密模式：使用标准 MLP
@@ -449,155 +490,3 @@ class FlowPredictorGRU(nn.Module):
         
         h_next = (1 - z) * h + z * h_tilde
         delta_flow = self.flow_head(h_next)
-        
-        return delta_flow, h_next
-
-def warp(x, flow):
-    """
-    [可微重采样 Warping]
-    使用预测的光流场对特征图进行空间扭曲。
-    带有 Grid 缓存机制以提升效率。
-    """
-    B, C, H, W = x.shape
-    # 生成基础网格 (cache grid 以加速)
-    if not hasattr(warp, 'grid') or warp.grid.shape != (1, H, W, 2) or warp.grid.device != x.device:
-        xx = torch.arange(0, W, device=x.device).view(1, -1).repeat(H, 1)
-        yy = torch.arange(0, H, device=x.device).view(-1, 1).repeat(1, W)
-        # [1, H, W, 2]
-        warp.grid = torch.stack((xx, yy), dim=-1).float().unsqueeze(0)
-    
-    # 扩展到 Batch 维度
-    grid = warp.grid.repeat(B, 1, 1, 1)
-    
-    # 加上预测的位移 flow (flow 是 [B, 2, H, W])
-    # 需要调整 flow 为 [B, H, W, 2] 以便相加
-    flow_perm = flow.permute(0, 2, 3, 1)
-    vgrid = grid + flow_perm
-    
-    # 归一化到 [-1, 1] 供 grid_sample 使用
-    vgrid[:, :, :, 0] = 2.0 * vgrid[:, :, :, 0] / max(W - 1, 1) - 1.0
-    vgrid[:, :, :, 1] = 2.0 * vgrid[:, :, :, 1] / max(H - 1, 1) - 1.0
-    
-    # 使用 border 模式以减少边界伪影
-    output = F.grid_sample(x, vgrid, mode='bilinear', padding_mode='border', align_corners=True)
-    return output
-
-class SparsityGate(nn.Module):
-    """
-    [稀疏门控]
-    引入膨胀卷积 (Dilated Conv) 扩大感受野。
-    目的：防止孤立的强回波点（极值）因为感受野不足而被误判为背景噪声。
-    """
-    def __init__(self, dim):
-        super().__init__()
-        self.gate = nn.Sequential(
-            # 第一层：基础特征提取
-            nn.Conv2d(dim, dim // 4, 3, 1, 1),
-            nn.SiLU(inplace=True),
-            
-            # [新增] 第二层：膨胀卷积 (Dilation=2)
-            # 感受野从 3x3 扩大到 7x7，能更好地感知"孤立点"周围的上下文
-            nn.Conv2d(dim // 4, dim // 4, 3, 1, 2, dilation=2),
-            nn.SiLU(inplace=True),
-            
-            # 第三层：输出 Mask
-            nn.Conv2d(dim // 4, 1, 1),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        # Mask: [B, 1, H, W], 范围 [0, 1]
-        return self.gate(x)
-
-class AdvectiveProjection(nn.Module):
-    """
-    [非线性动态平流投影层] (Non-linear Dynamic Advective Projection)
-    
-    改进点：
-    1. 引入 ConvGRU 进行迭代式流场更新，捕捉非线性运动。
-    2. 引入 SparsityGate，抑制背景噪声。
-    """
-    def __init__(self, dim, t_in, t_out):
-        super().__init__()
-        self.t_in = t_in
-        self.t_out = t_out
-        self.dim = dim
-        
-        # 1. 初始状态编码器: 将历史 T_in 帧压缩为初始隐状态
-        self.init_encoder = nn.Sequential(
-            nn.Conv2d(dim * t_in, dim, 1), 
-            nn.SiLU(inplace=True),
-            nn.Conv2d(dim, dim, 3, 1, 1) 
-        )
-        
-        # 2. 动态流预测器 (GRU): 逐步预测 delta_flow
-        self.flow_gru = FlowPredictorGRU(in_channels=dim, hidden_dim=dim)
-        
-        # 3. 稀疏门控 (Sparsity): 抑制背景
-        self.sparsity_gate = SparsityGate(dim)
-        
-        # 4. 演变修正网络 (Evolution Refinement): 处理强度生消
-        self.evolution_net = nn.Sequential(
-            nn.Conv3d(dim, dim, kernel_size=3, padding=1),
-            nn.GroupNorm(4, dim),
-            nn.SiLU(inplace=True),
-            nn.Conv3d(dim, dim, kernel_size=3, padding=1),
-            nn.GroupNorm(4, dim),
-            nn.SiLU(inplace=True)
-        )
-        
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, (nn.Conv2d, nn.Conv3d, nn.Linear)):
-            trunc_normal_(m.weight, std=.02)
-            if m.bias is not None: nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        # x: [B, T_in, C, H, W]
-        B, T_in, C, H, W = x.shape
-        
-        # --- A. 初始化状态 ---
-        x_flat = x.view(B, T_in * C, H, W)
-        # 初始隐状态 h0: 聚合历史信息
-        h_t = self.init_encoder(x_flat) 
-        # 初始特征 x0: 使用最后一帧作为平流的起点
-        curr_feat = x[:, -1]
-        # 初始流场: 全0 [B, 2, H, W]
-        curr_flow = torch.zeros(B, 2, H, W, device=x.device)
-        
-        warped_preds = []
-        
-        # --- B. 递归推演 (Recurrent Prediction) ---
-        for t in range(self.t_out):
-            # 1. GRU 更新: 根据当前特征和历史状态，预测流场增量
-            delta_flow, h_t = self.flow_gru(curr_feat, h_t)
-            
-            # 2. 累积流场: 允许流场随时间变化 (非线性)
-            curr_flow = curr_flow + delta_flow
-            
-            # 3. 执行 Warp
-            curr_feat_warped = warp(curr_feat, curr_flow)
-            
-            # 4. 稀疏门控 (Sparsity Gating)
-            # 计算重要性 Mask
-            importance_mask = self.sparsity_gate(curr_feat_warped)
-            # 软阈值处理：如果 mask 很小，则特征被抑制
-            curr_feat = curr_feat_warped * importance_mask
-            
-            warped_preds.append(curr_feat)
-            
-        # 堆叠结果: [B, T_out, C, H, W]
-        x_warped = torch.stack(warped_preds, dim=1)
-        
-        # --- C. 演变修正 (Evolution) ---
-        # 准备 3D Conv 输入
-        x_evolution = x.permute(0, 2, 1, 3, 4)
-        if T_in != self.t_out:
-            x_evolution = F.interpolate(x_evolution, size=(self.t_out, H, W), mode='trilinear', align_corners=False)
-        
-        x_resid = self.evolution_net(x_evolution)
-        x_resid = x_resid.permute(0, 2, 1, 3, 4)
-        
-        # 最终融合: 平流结果 + 演变残差
-        return x_warped + x_resid
