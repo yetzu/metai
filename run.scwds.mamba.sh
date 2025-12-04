@@ -68,6 +68,9 @@ case $MODE in
             --model.mamba_d_conv 4 \
             --model.mamba_expand 2 \
             --model.use_checkpoint true \
+
+            --model.anneal_start_epoch 5 \
+            --model.anneal_end_epoch 15 \
             --model.mamba_sparse_ratio 0.5 \
             --model.warmup_epoch 10 \
             --model.lr 1e-3 \
@@ -75,10 +78,12 @@ case $MODE in
             --model.use_curriculum_learning true \
             --model.use_temporal_weight true \
             --model.use_gan true \
-            --model.gan_start_epoch 10 \
+            --model.gan_start_epoch 30 \
             --model.gan_weight 0.01 \
+            --model.blur_epochs 20 \
             --model.discriminator_lr 2e-4 \
             --model.noise_dim 32 \
+
             --data.data_path $DATA_PATH \
             --data.batch_size $BATCH_SIZE \
             --data.num_workers 8
