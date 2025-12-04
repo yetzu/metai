@@ -306,7 +306,8 @@ class HybridLoss(nn.Module):
         # 3. 自动加权计算 (Automatic Weighting)
         # s: 可学习的不确定性参数
         # [增强] 增加 Clamp 防止数值爆炸 (s过大导致exp(-s)过小尚可，但s过小导致exp(-s)爆炸很危险)
-        s = self.params.clamp(min=-10.0, max=10.0)
+        s = self.params.clamp(min=-10.0, max=10.0).float()
+        losses = losses.float()
         
         # precision: 相当于权重 (1 / sigma^2)
         precision = torch.exp(-s)

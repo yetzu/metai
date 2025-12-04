@@ -190,18 +190,25 @@ class MeteoMambaModule(LightningModule):
             MLOGI(f"Epoch {self.current_epoch} | Current Sparse Ratio: {curr_ratio:.2f}")
         
     def on_validation_epoch_end(self):
-        # 1. 计算所有累积指标
         metrics = self.val_metrics.compute()
         
-        # 2. [关键修复] 建立别名映射: val_total_score -> val_score
-        # 这确保了 ModelCheckpoint 和 EarlyStopping 能找到监控指标
+        # 1. 核心指标映射 (用于 Checkpoint)
         if 'val_total_score' in metrics:
             self.log('val_score', metrics['val_total_score'], prog_bar=True, logger=True, sync_dist=True)
             
-        # 3. 记录其他所有详细指标 (如 val_csi, val_mae 等)
-        self.log_dict(metrics, prog_bar=False, logger=True, sync_dist=True)
+        # 2. [新增] 关键物理子指标显式记录 (便于 TensorBoard 分析)
+        # 假设 MetScore 返回了 val_ts_levels (Tensor)，我们取平均值作为 val_csi
+        if 'val_ts_levels' in metrics:
+             # ts_levels 通常是 [0.1, 1.0, 5.0] 等阈值的 TS，取均值代表整体 CSI
+            avg_csi = metrics['val_ts_levels'].mean()
+            self.log('val_csi', avg_csi, prog_bar=True, logger=True, sync_dist=True)
+
+        if 'val_mae_levels' in metrics:
+            avg_mae = metrics['val_mae_levels'].mean()
+            self.log('val_mae', avg_mae, prog_bar=True, logger=True, sync_dist=True)
         
-        # 4. 重置累积器
+        # 3. 记录所有原始指标
+        self.log_dict(metrics, prog_bar=False, logger=True, sync_dist=True)
         self.val_metrics.reset()
 
     def on_test_epoch_end(self):
