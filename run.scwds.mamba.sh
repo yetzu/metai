@@ -68,6 +68,7 @@ case $MODE in
             --model.mamba_d_conv 4 \
             --model.mamba_expand 2 \
             --model.use_checkpoint true \
+            --model.mamba_sparse_ratio 0.5 \
             --model.warmup_epoch 10 \
             --model.lr 1e-3 \
             --model.min_lr 1e-5 \

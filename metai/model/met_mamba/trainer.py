@@ -47,7 +47,8 @@ class MeteoMambaModule(l.LightningModule):
             mamba_d_state=self.config.mamba_d_state,
             mamba_d_conv=self.config.mamba_d_conv,
             mamba_expand=self.config.mamba_expand,
-            use_checkpoint=self.config.use_checkpoint
+            use_checkpoint=self.config.use_checkpoint,
+            mamba_sparse_ratio=self.config.mamba_sparse_ratio
         )
         
         # 3. 初始化混合损失函数 (HybridLoss - Auto Weighted)

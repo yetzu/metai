@@ -37,6 +37,7 @@ class ModelConfig(BaseModel):
     mamba_d_conv: int = 4   # 局部卷积核大小 (Local Conv Kernel Size)
     mamba_expand: int = 2   # 扩展因子 (Expansion Factor, e.g., 2 * d_model)
     use_checkpoint: bool = True # 是否开启梯度检查点 (Gradient Checkpointing) 以节省显存
+    mamba_sparse_ratio: float = 0.5
     
     # =========================================================
     # 4. 训练超参数 (Training Hyperparameters)
@@ -52,7 +53,6 @@ class ModelConfig(BaseModel):
     warmup_lr: float = 1e-5      # 预热起始学习率
     warmup_epoch: int = 20       # 预热轮数 (Warmup Epochs)
     weight_decay: float = 0.05   # 权重衰减 (L2 Regularization)
-    momentum: float = 0.9        # 动量因子 (仅用于 SGD)
     filter_bias_and_bn: bool = True # 是否不对 Bias 和 BN 参数做 Weight Decay
     
     # 学习率调度器 (Scheduler)

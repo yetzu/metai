@@ -9,7 +9,7 @@ from .modules import (
     ResizeConv, 
     STMambaBlock, 
     TimeAlignBlock,
-    AdvectiveProjection  # [新增] 引入显式平流投影层
+    AdvectiveProjection  # [核心组件] 非线性动态平流投影层
 )
 
 def sampling_generator(N, reverse=False):
@@ -106,7 +106,8 @@ class EvolutionNet(nn.Module):
     核心模块，利用 Mamba (SSM) 建模时空序列的演变规律。
     """
     def __init__(self, dim_in, dim_hid, num_layers, drop=0., drop_path=0., 
-                 mamba_kwargs={}, use_checkpoint=True, max_t=64, input_resolution=(64, 64)):
+                 mamba_kwargs={}, use_checkpoint=True, max_t=64, input_resolution=(64, 64),
+                 sparse_ratio=0.0): # [参数更新] 接收稀疏率
         super().__init__()
         # 特征投影层
         self.proj_in = nn.Linear(dim_in, dim_hid)
@@ -129,13 +130,16 @@ class EvolutionNet(nn.Module):
         
         # Drop path设置 (随机深度)
         dpr = [x.item() for x in torch.linspace(1e-2, drop_path, num_layers)]
+        
         # 堆叠 STMambaBlock
+        # 将 sparse_ratio 传递给每个 Block，实现计算加速
         self.layers = nn.ModuleList([
             STMambaBlock(
                 dim_hid, 
                 drop=drop, 
                 drop_path=dpr[i], 
-                use_checkpoint=use_checkpoint, 
+                use_checkpoint=use_checkpoint,
+                sparse_ratio=sparse_ratio, # [传递稀疏率]
                 **mamba_kwargs
             ) for i in range(num_layers)
         ])
@@ -207,6 +211,7 @@ class MeteoMamba(nn.Module):
                  mamba_d_conv=4, 
                  mamba_expand=2,
                  use_checkpoint=True,
+                 mamba_sparse_ratio=0.5, # [新增] 接收配置中的稀疏率
                  **kwargs):
         super().__init__()
         
@@ -234,10 +239,11 @@ class MeteoMamba(nn.Module):
             drop=0.0, drop_path=0.1, 
             mamba_kwargs=mamba_kwargs,
             use_checkpoint=use_checkpoint,
-            input_resolution=evo_res
+            input_resolution=evo_res,
+            sparse_ratio=mamba_sparse_ratio # [传递稀疏率]
         )
         
-        # 3. [修改] 显式平流时间投影层 (Advective Time Projection)
+        # 3. 显式平流时间投影层 (Advective Time Projection)
         # 替代原有的 Conv1d 投影。
         # 这里的 dim 对应 Encoder 的输出通道数 hid_S
         self.latent_time_proj = AdvectiveProjection(
@@ -270,8 +276,8 @@ class MeteoMamba(nn.Module):
         z = embed.view(B, T_in, C_hid, H_, W_)
         z = self.evolution(z)
         
-        # 3. [修改] 时间投影阶段 (Time Projection)
-        # 使用 AdvectiveProjection 进行流引导的特征变换
+        # 3. 时间投影阶段 (Time Projection)
+        # 使用 AdvectiveProjection 进行非线性动态流引导的特征变换
         # 输入: [B, T_in, C_hid, H_, W_]
         # 输出: [B, T_out, C_hid, H_, W_]
         z = self.latent_time_proj(z) 
