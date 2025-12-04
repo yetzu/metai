@@ -166,7 +166,8 @@ def main():
 
                 # 模型推理
                 # 输入: [B, T_in, C, H, W], 输出: [B, T_out, C, H, W]
-                batch_y_raw = model(batch_x)
+                # batch_y_raw = model(batch_x)
+                batch_y_raw = model(batch_x, current_epoch=100)
                 
                 # 范围截断 [0, 1]
                 batch_y = torch.clamp(batch_y_raw, 0.0, 1.0)
