@@ -16,10 +16,11 @@ from metai.utils import MLOGI
 
 class MeteoMambaModule(LightningModule):
     """
-    [MeteoMamba Lightning Module v2.1 - Fix Logging Error]
+    [MeteoMamba Lightning Module v2.2 - Fix DDP Sync Error]
     
     修复内容：
-    1. on_validation_epoch_end: 增加对非标量指标的过滤和降维处理，防止 logging 崩溃。
+    1. on_validation/test_epoch_end: 在 log(sync_dist=True) 之前将 CPU 指标移动回 GPU。
+       这是因为 NCCL 后端不支持 CPU Tensor 的集合通信。
     """
     
     def __init__(
@@ -154,7 +155,6 @@ class MeteoMambaModule(LightningModule):
         return y_hat
 
     def on_train_epoch_end(self):
-        # 1. 过滤标量指标进行记录
         train_metrics = self.train_metrics.compute()
         scalar_metrics = {k: v for k, v in train_metrics.items() if v.numel() == 1}
         self.log_dict(scalar_metrics, prog_bar=False)
@@ -165,12 +165,14 @@ class MeteoMambaModule(LightningModule):
         sch_d.step()
 
     def on_validation_epoch_end(self):
-        """
-        [修复重点] 增加对非标量指标的处理
-        """
+        # 1. 计算指标 (此时 Tensor 在 CPU 上)
         metrics = self.val_metrics.compute()
         
-        # 1. 分离标量 (Scalars) 和非标量 (Tensors)
+        # 2. [关键修复] 将所有 Tensor 移动回 GPU (self.device)
+        # NCCL 后端要求 sync_dist=True 时 Tensor 必须在 GPU 上
+        metrics = {k: v.to(self.device) for k, v in metrics.items()}
+        
+        # 3. 分离标量 (Scalars) 和非标量 (Tensors)
         scalar_metrics = {}
         tensor_metrics = {}
         
@@ -180,30 +182,28 @@ class MeteoMambaModule(LightningModule):
             else:
                 scalar_metrics[k] = v
         
-        # 2. 记录关键指标 val_score (用于 ModelCheckpoint)
-        # 优先使用 total_score，如果没有则尝试使用 csi 的均值
+        # 4. 记录关键指标 val_score
         val_score = scalar_metrics.get('val_total_score', None)
         if val_score is None and 'val_ts_levels' in tensor_metrics:
-             # 如果 total_score 不存在，用 CSI 均值代替
              val_score = tensor_metrics['val_ts_levels'].mean()
         
         if val_score is not None:
             self.log('val_score', val_score, prog_bar=True, logger=True, sync_dist=True)
 
-        # 3. 记录所有标量指标
+        # 5. 记录标量
         self.log_dict(scalar_metrics, prog_bar=False, logger=True, sync_dist=True)
         
-        # 4. [可选] 记录非标量指标的均值 (防止丢失信息)
+        # 6. 记录非标量的均值
         for k, v in tensor_metrics.items():
-            # 例如: val_score_time -> val_score_time_mean
             self.log(f"{k}_mean", v.mean(), prog_bar=False, logger=True, sync_dist=True)
         
-        # 重置
         self.val_metrics.reset()
 
     def on_test_epoch_end(self):
-        # 测试集同理，只记录标量
         metrics = self.test_metrics.compute()
+        # [修复] 测试时同样需要移动到 GPU 以支持多卡测试
+        metrics = {k: v.to(self.device) for k, v in metrics.items()}
+        
         scalar_metrics = {k: v for k, v in metrics.items() if v.numel() == 1}
         self.log_dict(scalar_metrics, prog_bar=False, sync_dist=True)
         self.test_metrics.reset()

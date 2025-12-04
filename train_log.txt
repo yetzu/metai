@@ -8,8 +8,8 @@ GPU available: True (cuda), used: True
 TPU available: False, using: 0 TPU cores
 HPU available: False, using: 0 HPUs
 Initializing distributed: GLOBAL_RANK: 0, MEMBER: 1/3
-[rank: 2] Seed set to 42
 [rank: 1] Seed set to 42
+[rank: 2] Seed set to 42
 Initializing distributed: GLOBAL_RANK: 1, MEMBER: 2/3
 Initializing distributed: GLOBAL_RANK: 2, MEMBER: 3/3
 ----------------------------------------------------------------------------------------------------
@@ -19,8 +19,8 @@ All distributed processes registered. Starting with 3 processes
 
 NCCL version 2.27.3+cuda12.9
 LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
-LOCAL_RANK: 1 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 LOCAL_RANK: 2 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
+LOCAL_RANK: 1 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/utilities/model_summary/model_summary.py:231: Precision bf16-mixed is not supported by the model summary.  Estimated model size in MB will not be accurate. Using 32 bits instead.
 
   | Name              | Type                | Params | Mode 
@@ -38,287 +38,10 @@ LOCAL_RANK: 2 - CUDA_VISIBLE_DEVICES: [0,1,2,3]
 96.428    Total estimated model params size (MB)
 294       Modules in train mode
 0         Modules in eval mode
-[2025-12-05 00:52:22.502] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
-[2025-12-05 00:52:22.603] [INFO] Dataset split: Train=8011, Val=1001, Test=1002
-Sanity Checking: |          | 0/? [00:00<?, ?it/s][2025-12-05 00:52:22.503] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
-[2025-12-05 00:52:22.608] [INFO] Dataset split: Train=8011, Val=1001, Test=1002
-[2025-12-05 00:52:22.503] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
-[2025-12-05 00:52:22.604] [INFO] Dataset split: Train=8011, Val=1001, Test=1002
-Sanity Checking: |          | 0/? [00:00<?, ?it/s]Sanity Checking DataLoader 0:   0%|          | 0/2 [00:00<?, ?it/s]Sanity Checking DataLoader 0:  50%|█████     | 1/2 [00:09<00:09,  0.10it/s]Sanity Checking DataLoader 0: 100%|██████████| 2/2 [00:11<00:00,  0.17it/s][rank0]: Traceback (most recent call last):
-[rank0]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
-[rank0]:     main()
-[rank0]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
-[rank0]:     cli = LightningCLI(
-[rank0]:           ^^^^^^^^^^^^^
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
-[rank0]:     self._run_subcommand(self.subcommand)
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
-[rank0]:     fn(**fn_kwargs)
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
-[rank0]:     call._call_and_handle_interrupt(
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
-[rank0]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
-[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
-[rank0]:     return function(*args, **kwargs)
-[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
-[rank0]:     self._run(model, ckpt_path=ckpt_path)
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
-[rank0]:     results = self._run_stage()
-[rank0]:               ^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1053, in _run_stage
-[rank0]:     self._run_sanity_check()
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1082, in _run_sanity_check
-[rank0]:     val_loop.run()
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/utilities.py", line 179, in _decorator
-[rank0]:     return loop_run(self, *args, **kwargs)
-[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 152, in run
-[rank0]:     return self.on_run_end()
-[rank0]:            ^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 295, in on_run_end
-[rank0]:     self._on_evaluation_epoch_end()
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 375, in _on_evaluation_epoch_end
-[rank0]:     call._call_lightning_module_hook(trainer, hook_name)
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 177, in _call_lightning_module_hook
-[rank0]:     output = fn(*args, **kwargs)
-[rank0]:              ^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/yyj/code/metai/model/met_mamba/trainer.py", line 234, in on_validation_epoch_end
-[rank0]:     self.log_dict(metrics, prog_bar=False, logger=True, sync_dist=True)
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 613, in log_dict
-[rank0]:     self.log(
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 483, in log
-[rank0]:     value = apply_to_collection(value, (Tensor, numbers.Number), self.__to_tensor, name)
-[rank0]:             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning_utilities/core/apply_func.py", line 64, in apply_to_collection
-[rank0]:     return function(data, *args, **kwargs)
-[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 663, in __to_tensor
-[rank0]:     raise ValueError(
-[rank0]: ValueError: `self.log(val_score_time, tensor([5.2763e-02, 3.4701e-02, 1.6089e-04, 7.7426e-05, 1.6907e-04, 9.6783e-05,
-[rank0]:         2.3816e-02, 8.5672e-03, 1.4609e-02, 1.4830e-04, 1.6302e-02, 1.6757e-04,
-[rank0]:         1.0978e-02, 2.5244e-03, 1.4908e-04, 2.3393e-04, 8.4918e-03, 9.0631e-03,
-[rank0]:         1.3220e-02, 2.3553e-04]))` was called, but the tensor must have a single element. You can try doing `self.log(val_score_time, tensor([5.2763e-02, 3.4701e-02, 1.6089e-04, 7.7426e-05, 1.6907e-04, 9.6783e-05,
-[rank0]:         2.3816e-02, 8.5672e-03, 1.4609e-02, 1.4830e-04, 1.6302e-02, 1.6757e-04,
-[rank0]:         1.0978e-02, 2.5244e-03, 1.4908e-04, 2.3393e-04, 8.4918e-03, 9.0631e-03,
-[rank0]:         1.3220e-02, 2.3553e-04]).mean())`
-[rank2]:[W1205 00:52:52.780645123 TCPStore.cpp:125] [c10d] recvValue failed on SocketImpl(fd=54, addr=[localhost]:38760, remote=[localhost]:37721): Failed to recv, got 0 bytes. Connection was likely closed. Did the remote server shutdown or crash?
-Exception raised from recvBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:682 (most recent call first):
-frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7dfbe7d7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
-frame #1: <unknown function> + 0x5d694f1 (0x7dfbcb5694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #2: <unknown function> + 0x5d6a8ed (0x7dfbcb56a8ed in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #3: <unknown function> + 0x5d6b49a (0x7dfbcb56b49a in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x31e (0x7dfbcb5661be in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7dfb6fc70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
-frame #6: <unknown function> + 0xdbbf4 (0x7dfb530dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
-frame #7: <unknown function> + 0x9caa4 (0x7dfbe8c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
-frame #8: <unknown function> + 0x129c6c (0x7dfbe8d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
-
-[rank2]:[W1205 00:52:52.786401739 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Failed to recv, got 0 bytes. Connection was likely closed. Did the remote server shutdown or crash?
-[rank1]:[W1205 00:52:53.750063598 TCPStore.cpp:125] [c10d] recvValue failed on SocketImpl(fd=54, addr=[localhost]:38752, remote=[localhost]:37721): Failed to recv, got 0 bytes. Connection was likely closed. Did the remote server shutdown or crash?
-Exception raised from recvBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:682 (most recent call first):
-frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7447c817eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
-frame #1: <unknown function> + 0x5d694f1 (0x7447ab9694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #2: <unknown function> + 0x5d6a8ed (0x7447ab96a8ed in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #3: <unknown function> + 0x5d6b49a (0x7447ab96b49a in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x31e (0x7447ab9661be in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x744750070598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
-frame #6: <unknown function> + 0xdbbf4 (0x7447334dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
-frame #7: <unknown function> + 0x9caa4 (0x7447c909caa4 in /lib/x86_64-linux-gnu/libc.so.6)
-frame #8: <unknown function> + 0x129c6c (0x7447c9129c6c in /lib/x86_64-linux-gnu/libc.so.6)
-
-[rank1]:[W1205 00:52:53.755912484 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 1] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Failed to recv, got 0 bytes. Connection was likely closed. Did the remote server shutdown or crash?
-[rank2]:[W1205 00:52:53.786732935 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:38760, remote=[localhost]:37721): Broken pipe
-Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
-frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7dfbe7d7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
-frame #1: <unknown function> + 0x5d694f1 (0x7dfbcb5694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #2: <unknown function> + 0x5d69d82 (0x7dfbcb569d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #3: <unknown function> + 0x5d6b88e (0x7dfbcb56b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x7dfbcb5661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7dfb6fc70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
-frame #6: <unknown function> + 0xdbbf4 (0x7dfb530dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
-frame #7: <unknown function> + 0x9caa4 (0x7dfbe8c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
-frame #8: <unknown function> + 0x129c6c (0x7dfbe8d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
-
-[rank2]:[W1205 00:52:53.792809019 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
-[rank1]:[W1205 00:52:54.756165428 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:38752, remote=[localhost]:37721): Broken pipe
-Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
-frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7447c817eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
-frame #1: <unknown function> + 0x5d694f1 (0x7447ab9694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #2: <unknown function> + 0x5d69d82 (0x7447ab969d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #3: <unknown function> + 0x5d6b88e (0x7447ab96b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x7447ab9661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x744750070598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
-frame #6: <unknown function> + 0xdbbf4 (0x7447334dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
-frame #7: <unknown function> + 0x9caa4 (0x7447c909caa4 in /lib/x86_64-linux-gnu/libc.so.6)
-frame #8: <unknown function> + 0x129c6c (0x7447c9129c6c in /lib/x86_64-linux-gnu/libc.so.6)
-
-[rank1]:[W1205 00:52:54.763320456 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 1] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
-[rank2]:[W1205 00:52:54.792995244 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:38760, remote=[localhost]:37721): Broken pipe
-Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
-frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7dfbe7d7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
-frame #1: <unknown function> + 0x5d694f1 (0x7dfbcb5694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #2: <unknown function> + 0x5d69d82 (0x7dfbcb569d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #3: <unknown function> + 0x5d6b88e (0x7dfbcb56b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x7dfbcb5661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7dfb6fc70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
-frame #6: <unknown function> + 0xdbbf4 (0x7dfb530dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
-frame #7: <unknown function> + 0x9caa4 (0x7dfbe8c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
-frame #8: <unknown function> + 0x129c6c (0x7dfbe8d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
-
-[rank2]:[W1205 00:52:54.797943305 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
-[rank1]:[W1205 00:52:55.763546877 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:38752, remote=[localhost]:37721): Broken pipe
-Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
-frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7447c817eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
-frame #1: <unknown function> + 0x5d694f1 (0x7447ab9694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #2: <unknown function> + 0x5d69d82 (0x7447ab969d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #3: <unknown function> + 0x5d6b88e (0x7447ab96b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x7447ab9661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x744750070598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
-frame #6: <unknown function> + 0xdbbf4 (0x7447334dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
-frame #7: <unknown function> + 0x9caa4 (0x7447c909caa4 in /lib/x86_64-linux-gnu/libc.so.6)
-frame #8: <unknown function> + 0x129c6c (0x7447c9129c6c in /lib/x86_64-linux-gnu/libc.so.6)
-
-[rank1]:[W1205 00:52:55.768374459 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 1] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
-[rank2]:[W1205 00:52:55.798176607 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:38760, remote=[localhost]:37721): Broken pipe
-Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
-frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7dfbe7d7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
-frame #1: <unknown function> + 0x5d694f1 (0x7dfbcb5694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #2: <unknown function> + 0x5d69d82 (0x7dfbcb569d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #3: <unknown function> + 0x5d6b88e (0x7dfbcb56b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x7dfbcb5661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7dfb6fc70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
-frame #6: <unknown function> + 0xdbbf4 (0x7dfb530dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
-frame #7: <unknown function> + 0x9caa4 (0x7dfbe8c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
-frame #8: <unknown function> + 0x129c6c (0x7dfbe8d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
-
-[rank2]:[W1205 00:52:55.804389471 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
-[rank1]: Traceback (most recent call last):
-[rank1]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
-[rank1]:     main()
-[rank1]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
-[rank1]:     cli = LightningCLI(
-[rank1]:           ^^^^^^^^^^^^^
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
-[rank1]:     self._run_subcommand(self.subcommand)
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
-[rank1]:     fn(**fn_kwargs)
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
-[rank1]:     call._call_and_handle_interrupt(
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
-[rank1]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
-[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
-[rank1]:     return function(*args, **kwargs)
-[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
-[rank1]:     self._run(model, ckpt_path=ckpt_path)
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
-[rank1]:     results = self._run_stage()
-[rank1]:               ^^^^^^^^^^^^^^^^^
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1053, in _run_stage
-[rank1]:     self._run_sanity_check()
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1082, in _run_sanity_check
-[rank1]:     val_loop.run()
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/utilities.py", line 179, in _decorator
-[rank1]:     return loop_run(self, *args, **kwargs)
-[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 152, in run
-[rank1]:     return self.on_run_end()
-[rank1]:            ^^^^^^^^^^^^^^^^^
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 295, in on_run_end
-[rank1]:     self._on_evaluation_epoch_end()
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 375, in _on_evaluation_epoch_end
-[rank1]:     call._call_lightning_module_hook(trainer, hook_name)
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 177, in _call_lightning_module_hook
-[rank1]:     output = fn(*args, **kwargs)
-[rank1]:              ^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/home/yyj/code/metai/model/met_mamba/trainer.py", line 234, in on_validation_epoch_end
-[rank1]:     self.log_dict(metrics, prog_bar=False, logger=True, sync_dist=True)
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 613, in log_dict
-[rank1]:     self.log(
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 483, in log
-[rank1]:     value = apply_to_collection(value, (Tensor, numbers.Number), self.__to_tensor, name)
-[rank1]:             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning_utilities/core/apply_func.py", line 64, in apply_to_collection
-[rank1]:     return function(data, *args, **kwargs)
-[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 663, in __to_tensor
-[rank1]:     raise ValueError(
-[rank1]: ValueError: `self.log(val_score_time, tensor([0.0285, 0.0246, 0.0002, 0.0001, 0.0001, 0.0002, 0.0078, 0.0081, 0.0086,
-[rank1]:         0.0003, 0.0070, 0.0002, 0.0074, 0.0041, 0.0003, 0.0003, 0.0079, 0.0045,
-[rank1]:         0.0042, 0.0004]))` was called, but the tensor must have a single element. You can try doing `self.log(val_score_time, tensor([0.0285, 0.0246, 0.0002, 0.0001, 0.0001, 0.0002, 0.0078, 0.0081, 0.0086,
-[rank1]:         0.0003, 0.0070, 0.0002, 0.0074, 0.0041, 0.0003, 0.0003, 0.0079, 0.0045,
-[rank1]:         0.0042, 0.0004]).mean())`
-[rank2]:[W1205 00:52:56.804589020 TCPStore.cpp:106] [c10d] sendBytes failed on SocketImpl(fd=54, addr=[localhost]:38760, remote=[localhost]:37721): Broken pipe
-Exception raised from sendBytes at /pytorch/torch/csrc/distributed/c10d/Utils.hpp:653 (most recent call first):
-frame #0: c10::Error::Error(c10::SourceLocation, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >) + 0x80 (0x7dfbe7d7eeb0 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libc10.so)
-frame #1: <unknown function> + 0x5d694f1 (0x7dfbcb5694f1 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #2: <unknown function> + 0x5d69d82 (0x7dfbcb569d82 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #3: <unknown function> + 0x5d6b88e (0x7dfbcb56b88e in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #4: c10d::TCPStore::check(std::vector<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::allocator<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > > > const&) + 0x30e (0x7dfbcb5661ae in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cpu.so)
-frame #5: c10d::ProcessGroupNCCL::HeartbeatMonitor::runLoop() + 0x398 (0x7dfb6fc70598 in /home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/torch/lib/libtorch_cuda.so)
-frame #6: <unknown function> + 0xdbbf4 (0x7dfb530dbbf4 in /home/yyj/opt/anaconda3/envs/metai/bin/../lib/libstdc++.so.6)
-frame #7: <unknown function> + 0x9caa4 (0x7dfbe8c9caa4 in /lib/x86_64-linux-gnu/libc.so.6)
-frame #8: <unknown function> + 0x129c6c (0x7dfbe8d29c6c in /lib/x86_64-linux-gnu/libc.so.6)
-
-[rank2]:[W1205 00:52:56.809524232 ProcessGroupNCCL.cpp:1783] [PG ID 0 PG GUID 0(default_pg) Rank 2] Failed to check the "should dump" flag on TCPStore, (maybe TCPStore server has shut down too early), with error: Broken pipe
-[rank2]: Traceback (most recent call last):
-[rank2]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 24, in <module>
-[rank2]:     main()
-[rank2]:   File "/home/yyj/code/run/train_scwds_mamba.py", line 16, in main
-[rank2]:     cli = LightningCLI(
-[rank2]:           ^^^^^^^^^^^^^
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 414, in __init__
-[rank2]:     self._run_subcommand(self.subcommand)
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/cli.py", line 747, in _run_subcommand
-[rank2]:     fn(**fn_kwargs)
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 560, in fit
-[rank2]:     call._call_and_handle_interrupt(
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 48, in _call_and_handle_interrupt
-[rank2]:     return trainer.strategy.launcher.launch(trainer_fn, *args, trainer=trainer, **kwargs)
-[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/strategies/launchers/subprocess_script.py", line 105, in launch
-[rank2]:     return function(*args, **kwargs)
-[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 598, in _fit_impl
-[rank2]:     self._run(model, ckpt_path=ckpt_path)
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1011, in _run
-[rank2]:     results = self._run_stage()
-[rank2]:               ^^^^^^^^^^^^^^^^^
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1053, in _run_stage
-[rank2]:     self._run_sanity_check()
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/trainer.py", line 1082, in _run_sanity_check
-[rank2]:     val_loop.run()
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/utilities.py", line 179, in _decorator
-[rank2]:     return loop_run(self, *args, **kwargs)
-[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 152, in run
-[rank2]:     return self.on_run_end()
-[rank2]:            ^^^^^^^^^^^^^^^^^
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 295, in on_run_end
-[rank2]:     self._on_evaluation_epoch_end()
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/loops/evaluation_loop.py", line 375, in _on_evaluation_epoch_end
-[rank2]:     call._call_lightning_module_hook(trainer, hook_name)
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/trainer/call.py", line 177, in _call_lightning_module_hook
-[rank2]:     output = fn(*args, **kwargs)
-[rank2]:              ^^^^^^^^^^^^^^^^^^^
-[rank2]:   File "/home/yyj/code/metai/model/met_mamba/trainer.py", line 234, in on_validation_epoch_end
-[rank2]:     self.log_dict(metrics, prog_bar=False, logger=True, sync_dist=True)
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 613, in log_dict
-[rank2]:     self.log(
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 483, in log
-[rank2]:     value = apply_to_collection(value, (Tensor, numbers.Number), self.__to_tensor, name)
-[rank2]:             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning_utilities/core/apply_func.py", line 64, in apply_to_collection
-[rank2]:     return function(data, *args, **kwargs)
-[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank2]:   File "/home/yyj/opt/anaconda3/envs/metai/lib/python3.11/site-packages/lightning/pytorch/core/module.py", line 663, in __to_tensor
-[rank2]:     raise ValueError(
-[rank2]: ValueError: `self.log(val_score_time, tensor([0.0370, 0.0343, 0.0007, 0.0004, 0.0003, 0.0002, 0.0208, 0.0107, 0.0203,
-[rank2]:         0.0004, 0.0183, 0.0003, 0.0155, 0.0054, 0.0003, 0.0004, 0.0116, 0.0107,
-[rank2]:         0.0142, 0.0004]))` was called, but the tensor must have a single element. You can try doing `self.log(val_score_time, tensor([0.0370, 0.0343, 0.0007, 0.0004, 0.0003, 0.0002, 0.0208, 0.0107, 0.0203,
-[rank2]:         0.0004, 0.0183, 0.0003, 0.0155, 0.0054, 0.0003, 0.0004, 0.0116, 0.0107,
-[rank2]:         0.0142, 0.0004]).mean())`
- Operation Completed.
+[2025-12-05 00:59:59.301] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
+[2025-12-05 00:59:59.400] [INFO] Dataset split: Train=8011, Val=1001, Test=1002
+Sanity Checking: |          | 0/? [00:00<?, ?it/s][2025-12-05 00:59:59.302] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
+[2025-12-05 00:59:59.402] [INFO] Dataset split: Train=8011, Val=1001, Test=1002
+[2025-12-05 00:59:59.303] [INFO] Loading configuration from file: /home/yyj/code/metai/config.yaml
+[2025-12-05 00:59:59.407] [INFO] Dataset split: Train=8011, Val=1001, Test=1002
+Sanity Checking: |          | 0/? [00:00<?, ?it/s]Sanity Checking DataLoader 0:   0%|          | 0/2 [00:00<?, ?it/s]Sanity Checking DataLoader 0:  50%|█████     | 1/2 [00:12<00:12,  0.08it/s]Sanity Checking DataLoader 0: 100%|██████████| 2/2 [00:14<00:00,  0.14it/s]                                                                           Training: |          | 0/? [00:00<?, ?it/s]Training: |          | 0/? [00:00<?, ?it/s]Epoch 0:   0%|          | 0/668 [00:00<?, ?it/s]
