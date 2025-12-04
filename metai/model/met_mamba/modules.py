@@ -482,28 +482,9 @@ def warp(x, flow):
     output = F.grid_sample(x, vgrid, mode='bilinear', padding_mode='border', align_corners=True)
     return output
 
-# class SparsityGate(nn.Module):
-#     """
-#     [稀疏门控]
-#     生成一个 Importance Mask，抑制低价值区域（背景）的特征更新，
-#     让模型专注于有云区域的演变。
-#     """
-#     def __init__(self, dim):
-#         super().__init__()
-#         self.gate = nn.Sequential(
-#             nn.Conv2d(dim, dim // 4, 3, 1, 1),
-#             nn.SiLU(inplace=True),
-#             nn.Conv2d(dim // 4, 1, 1),
-#             nn.Sigmoid()
-#         )
-
-#     def forward(self, x):
-#         # Mask: [B, 1, H, W], 范围 [0, 1]
-#         return self.gate(x)
-
 class SparsityGate(nn.Module):
     """
-    [稀疏门控 - 增强版]
+    [稀疏门控]
     引入膨胀卷积 (Dilated Conv) 扩大感受野。
     目的：防止孤立的强回波点（极值）因为感受野不足而被误判为背景噪声。
     """
