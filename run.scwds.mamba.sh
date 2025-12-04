@@ -1,13 +1,12 @@
 #!/bin/bash
 
-# MeteoMamba Workflow Script
-# Modes: 
-#   1. Train (MeteoMamba Training)
-#   2. Test (Metrics & Evaluation)
-#   3. Infer (Generate Submission Files 301x301)
+# =========================================================
+# MeteoMamba Workflow Script (Fixed: Removed conflicting clip args)
+# =========================================================
 
 export PYTHONPATH=$PYTHONPATH:$(pwd)
-# 显存优化：减少碎片化
+
+# --- 显存与通信优化 ---
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
 export NCCL_P2P_DISABLE=0
 export NCCL_IB_DISABLE=0
@@ -20,9 +19,7 @@ if [ $# -eq 0 ]; then
 fi
 
 MODE=$1
-
-# Device Configuration
-# 请根据实际情况调整显卡，例如单卡 "[0]" 或多卡 "[0,1,2,3]"
+# 设置显卡设备 [1,2,3]
 DEVICES="[1,2,3]" 
 DATA_PATH="data/samples.jsonl"
 SAVE_DIR="./output" 
@@ -31,59 +28,51 @@ BATCH_SIZE=4
 case $MODE in
     "train")
         echo "--------------------------------------------------------"
-        echo " [MetAI] Starting Training (MeteoMamba) ..."
+        echo " [MetAI] Starting Training (Phase: Physics -> Sparse -> GAN) ..."
         echo "--------------------------------------------------------"
 
+        # 注意：已移除 --trainer.gradient_clip_val，因为代码中已实现手动裁剪
+        
         python run/train_scwds_mamba.py fit \
             --seed_everything 42 \
             --trainer.default_root_dir $SAVE_DIR \
             --trainer.accelerator cuda \
             --trainer.devices $DEVICES \
-            --trainer.strategy ddp \
+            --trainer.strategy ddp_find_unused_parameters_true \
             --trainer.precision bf16-mixed \
             --trainer.max_epochs 100 \
-            --trainer.log_every_n_steps 1000 \
-            --trainer.accumulate_grad_batches 2 \
-            --trainer.gradient_clip_val 0.5 \
-            --trainer.gradient_clip_algorithm "norm" \
+            --trainer.log_every_n_steps 100 \
+            --trainer.accumulate_grad_batches 1 \
             --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
             --trainer.callbacks.save_top_k -1 \
             --trainer.callbacks.save_last true \
-            --trainer.callbacks.filename "{epoch:02d}-{val_score:.4f}" \
+            --trainer.callbacks.filename "best-epoch={epoch:02d}-score={val_score:.4f}" \
             --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
             --trainer.callbacks.patience 20 \
-            --model.batch_size $BATCH_SIZE \
             --model.in_shape "[31, 256, 256]" \
-            --model.obs_seq_len 10 \
-            --model.pred_seq_len 20 \
-            --model.hid_S 128 \
-            --model.hid_T 512 \
+            --model.in_seq_len 10 \
+            --model.out_seq_len 20 \
+            --model.hid_S 64 \
+            --model.hid_T 256 \
             --model.N_S 4 \
             --model.N_T 8 \
             --model.mamba_d_state 32 \
             --model.mamba_d_conv 4 \
             --model.mamba_expand 2 \
             --model.use_checkpoint true \
-
             --model.anneal_start_epoch 5 \
             --model.anneal_end_epoch 15 \
             --model.mamba_sparse_ratio 0.5 \
-            --model.warmup_epoch 10 \
-            --model.lr 1e-3 \
-            --model.min_lr 1e-5 \
-            --model.use_curriculum_learning true \
-            --model.use_temporal_weight true \
             --model.use_gan true \
-            --model.gan_start_epoch 30 \
+            --model.gan_start_epoch 20 \
             --model.gan_weight 0.01 \
-            --model.blur_epochs 20 \
             --model.discriminator_lr 2e-4 \
-            --model.noise_dim 32 \
-
+            --model.lr 1e-3 \
+            --model.use_temporal_weight true \
             --data.data_path $DATA_PATH \
             --data.batch_size $BATCH_SIZE \
             --data.num_workers 8
@@ -94,12 +83,11 @@ case $MODE in
         echo " [MetAI] Starting Test (Metrics & Evaluation)..."
         echo "----------------------------------------"
         
-        # 自动查找最佳 Checkpoint
         CKPT_PATH=$(find $SAVE_DIR -name "*val_score*.ckpt" | sort -V | tail -n 1)
         if [ -z "$CKPT_PATH" ]; then CKPT_PATH=$(find $SAVE_DIR -name "last.ckpt" | head -n 1); fi
         
         if [ -z "$CKPT_PATH" ]; then
-            echo " Error: Checkpoint not found"
+            echo " Error: Checkpoint not found in $SAVE_DIR"
             exit 1
         fi
         
@@ -113,8 +101,7 @@ case $MODE in
             --obs_seq_len 10 \
             --pred_seq_len 20 \
             --num_samples 10 \
-            --accelerator cuda:0 \
-            
+            --accelerator cuda:0 
         ;;
 
     "infer")
@@ -122,6 +109,9 @@ case $MODE in
         echo " [MetAI] Starting Inference (Submission Generation)..."
         echo "----------------------------------------"
         
+        CKPT_PATH=$(find $SAVE_DIR -name "*val_score*.ckpt" | sort -V | tail -n 1)
+        if [ -z "$CKPT_PATH" ]; then CKPT_PATH=$(find $SAVE_DIR -name "last.ckpt" | head -n 1); fi
+
         python run/infer_scwds_mamba.py \
             --ckpt_dir "$SAVE_DIR" \
             --data_path "data/samples.testset.jsonl" \
