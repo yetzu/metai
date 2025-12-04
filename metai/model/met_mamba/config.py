@@ -41,8 +41,10 @@ class ModelConfig(BaseModel):
     mamba_expand: int = 2
     use_checkpoint: bool = True
     
-    # 稀疏计算率 (Sparse Ratio)
-    mamba_sparse_ratio: float = 0.5 
+    # 稀疏计算与退火参数 (Sparse Computation & Annealing)
+    mamba_sparse_ratio: float = 0.5  # 目标稀疏率
+    anneal_start_epoch: int = 5      # [新增] 开始进行稀疏化退火的 Epoch
+    anneal_end_epoch: int = 15       # [新增] 达到目标稀疏率的 Epoch
     
     # =========================================================
     # 4. 训练超参数

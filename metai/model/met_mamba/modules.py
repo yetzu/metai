@@ -9,15 +9,15 @@ from timm.layers.weight_init import trunc_normal_
 from mamba_ssm import Mamba
 
 # ==========================================
-# 基础组件 (Basic Components) - 保持不变
+# 基础组件 (Basic Components)
 # ==========================================
-# (RMSNorm, BasicConv2d, ConvSC, ResizeConv, TimeAlignBlock 代码保持原样，此处省略以节省篇幅)
 
 class RMSNorm(nn.Module):
     def __init__(self, d_model: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(d_model))
+
     def forward(self, x):
         output = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
         return output * self.weight
@@ -36,10 +36,12 @@ class BasicConv2d(nn.Module):
         self.norm = nn.GroupNorm(2, out_channels)
         self.act = nn.SiLU(inplace=True)
         self.apply(self._init_weights)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Conv2d):
             trunc_normal_(m.weight, std=.02)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
+
     def forward(self, x):
         y = self.conv(x)
         if self.act_norm: y = self.act(self.norm(y))
@@ -51,6 +53,7 @@ class ConvSC(nn.Module):
         stride = 2 if downsampling else 1
         padding = (kernel_size - stride + 1) // 2
         self.conv = BasicConv2d(C_in, C_out, kernel_size, stride, padding, upsampling=upsampling, act_norm=act_norm)
+
     def forward(self, x): return self.conv(x)
 
 class ResizeConv(nn.Module):
@@ -62,10 +65,12 @@ class ResizeConv(nn.Module):
         self.norm = nn.GroupNorm(2, out_channels) if act_norm else nn.Identity()
         self.act = nn.SiLU(inplace=True) if act_norm else nn.Identity()
         self.apply(self._init_weights)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Conv2d):
             trunc_normal_(m.weight, std=.02)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
+
     def forward(self, x):
         x = self.upsample(x)
         x = self.conv(x)
@@ -78,14 +83,17 @@ class TimeAlignBlock(nn.Module):
         self.time_proj = nn.Linear(t_in, t_out)
         self.norm = nn.LayerNorm(dim)
         self.apply(self._init_weights)
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
             if m.bias is not None: nn.init.constant_(m.bias, 0)
+
     def forward(self, x):
-        x = x.permute(0, 2, 3, 4, 1).contiguous() 
-        x = self.time_proj(x) 
-        x = x.permute(0, 4, 1, 2, 3).contiguous() 
+        # x: [B, T_in, C, H, W]
+        x = x.permute(0, 2, 3, 4, 1).contiguous() # -> [B, C, H, W, T_in]
+        x = self.time_proj(x) # -> [B, C, H, W, T_out]
+        x = x.permute(0, 4, 1, 2, 3).contiguous() # -> [B, T_out, C, H, W]
         B, T, C, H, W = x.shape
         x = x.view(B, T, C, -1).permute(0, 1, 3, 2)
         x = self.norm(x)
@@ -93,92 +101,89 @@ class TimeAlignBlock(nn.Module):
         return x
 
 # ==========================================
-# 稀疏计算组件 (Sparse Computation Components)
+# 稀疏计算组件 (Structured Sparse Components)
 # ==========================================
 
-class SparseTokenHandler(nn.Module):
+class SpatialSparseTokenHandler(nn.Module):
     """
-    [稀疏 Token 处理器 - 改进版]
-    实现真正的计算稀疏化，并支持“条件相关性”采样。
+    [结构化空间稀疏处理器 - 重构版]
+    策略：保持时间轴 T 完整，仅筛选高价值的空间坐标 (H, W)。
+    物理意义：追踪活跃天气系统（如高反射率区域）的完整时间演变过程，忽略静止背景。
     """
-    def __init__(self, sparse_ratio=0.5, random_ratio=0.1):
+    def __init__(self, sparse_ratio=0.5):
         super().__init__()
         self.sparse_ratio = sparse_ratio
-        self.random_ratio = random_ratio
 
-    def sparsify(self, x, importance_score=None):
+    def sparsify(self, x):
         """
-        Dense [B, L, C] -> Sparse [B, K, C]
+        Input: [B, T, C, H, W] (保持时空结构)
         
-        Args:
-            x: 输入特征
-            importance_score: [B, L] 外部计算的重要性分数 (可选)。
-                              若提供，则基于此分数进行 Top-K 选择；否则基于 L2 Norm。
+        Returns:
+            x_sparse: [B, K, T, C]  <- K 是选中的空间点数，T 是完整时间序列
+            indices:  [B, K]        <- 选中的空间索引 (0 ~ H*W-1)
+            shape:    tuple         <- 用于恢复原始形状
         """
-        B, L, C = x.shape
+        B, T, C, H, W = x.shape
+        N_spatial = H * W
         
-        # [逻辑变更] 优先使用外部传入的重要性分数 (如基于时序差分的)
-        if importance_score is not None:
-            # 确保维度匹配 [B, L]
-            if importance_score.dim() == 3: 
-                score = importance_score.mean(dim=-1)
-            else:
-                score = importance_score
-        else:
-            # 默认使用 L2 Norm
-            score = x.norm(dim=-1)
+        # 1. 计算空间重要性图 (Spatial Importance Map)
+        # 策略：评估每个空间位置在整个时间段 T 内的总能量/活跃度
+        # [B, T, C, H, W] -> [B, H, W] (对 T 和 C 求范数/平均)
+        # 这里使用 L2 Norm 来表示能量
+        spatial_energy = x.norm(dim=2).mean(dim=1) 
         
-        # 确定保留数量 K
-        keep_len = max(1, int(L * (1.0 - self.sparse_ratio)))
+        # 展平空间维度: [B, H*W]
+        spatial_scores = spatial_energy.view(B, N_spatial)
         
-        # 混合采样策略: Top-K (强信号) + Random (弱信号探查)
-        if self.random_ratio > 0 and keep_len > 1:
-            num_random = int(keep_len * self.random_ratio)
-            num_top = max(1, keep_len - num_random)
-            num_random = max(0, keep_len - num_top)
-        else:
-            num_top = keep_len
-            num_random = 0
-            
-        # 1. 获取 Top-K 索引 (强信号)
-        _, top_indices = torch.topk(score, k=num_top, dim=1)
+        # 2. 确定保留数量 K
+        keep_k = max(1, int(N_spatial * (1.0 - self.sparse_ratio)))
         
-        # 2. 获取随机索引 (弱信号)
-        if num_random > 0:
-            mask = torch.ones(B, L, device=x.device, dtype=torch.bool)
-            mask.scatter_(1, top_indices, False)
-            
-            rand_indices_list = []
-            for b in range(B):
-                remaining_indices = torch.nonzero(mask[b], as_tuple=False).squeeze(-1)
-                if len(remaining_indices) >= num_random:
-                    perm = torch.randperm(len(remaining_indices), device=x.device)[:num_random]
-                    chosen = remaining_indices[perm]
-                else:
-                    chosen = remaining_indices
-                rand_indices_list.append(chosen)
-            
-            rand_indices = torch.stack(rand_indices_list, dim=0)
-            indices = torch.cat([top_indices, rand_indices], dim=1)
-        else:
-            indices = top_indices
+        # 3. Top-K 选择 (仅在空间维度筛选)
+        _, top_indices = torch.topk(spatial_scores, k=keep_k, dim=1)
+        # 排序索引以保持空间相对顺序 (可选，但在纯时间 Mamba 中不影响 T 轴)
+        top_indices, _ = torch.sort(top_indices, dim=1) # [B, K]
         
-        # 排序索引保持时序/空间相对顺序
-        indices, _ = torch.sort(indices, dim=1)
+        # 4. Gather 操作 (提取完整的时空柱)
+        # 目标: 从 [B, T, C, H, W] 中提取 [B, K, T, C]
         
-        # Gather 提取 Active Tokens
-        batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, indices.shape[1])
-        x_sparse = x[batch_indices, indices]
+        # 调整 x 形状以便 gather: [B, H*W, T, C]
+        x_flat = x.permute(0, 3, 4, 1, 2).reshape(B, N_spatial, T, C)
         
-        return x_sparse, indices, (B, L, C)
+        # 扩展索引以匹配 T 和 C 维度
+        # indices: [B, K] -> [B, K, T, C]
+        idx_expanded = top_indices.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T, C)
+        
+        # 提取: [B, K, T, C]
+        x_sparse = torch.gather(x_flat, 1, idx_expanded)
+        
+        return x_sparse, top_indices, (B, T, C, H, W)
 
     def densify(self, x_sparse, indices, original_shape):
-        """Sparse [B, K, C] -> Dense [B, L, C]"""
-        B, L, C = original_shape
-        keep_len = x_sparse.shape[1]
-        x_dense = torch.zeros(B, L, C, device=x_sparse.device, dtype=x_sparse.dtype)
-        batch_indices = torch.arange(B, device=x_sparse.device).unsqueeze(1).expand(-1, keep_len)
-        x_dense[batch_indices, indices] = x_sparse
+        """
+        将稀疏计算结果填回原始稠密形状。
+        Args:
+            x_sparse: [B, K, T, C]
+            indices:  [B, K]
+            original_shape: (B, T, C, H, W)
+        Returns:
+            x_dense: [B, T, C, H, W] (未选中位置填充为 0)
+        """
+        B, T, C, H, W = original_shape
+        K = x_sparse.shape[1]
+        N_spatial = H * W
+        
+        # 准备空白容器: [B, H*W, T, C]
+        x_dense_flat = torch.zeros(B, N_spatial, T, C, device=x_sparse.device, dtype=x_sparse.dtype)
+        
+        # 扩展索引
+        idx_expanded = indices.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T, C)
+        
+        # 填充回原位
+        x_dense_flat.scatter_(1, idx_expanded, x_sparse)
+        
+        # 恢复原始形状: [B, H*W, T, C] -> [B, T, C, H, W]
+        x_dense = x_dense_flat.view(B, H, W, T, C).permute(0, 3, 4, 1, 2)
+        
         return x_dense
 
 class LocalityEnhancedMLP(nn.Module):
@@ -211,51 +216,24 @@ class LocalityEnhancedMLP(nn.Module):
         x = self.drop(x)
         return x
 
-class SparseLocalityEnhancedMLP(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.dwconv = nn.Conv2d(hidden_features, hidden_features, 3, 1, 1, bias=True, groups=hidden_features)
-        self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_features, out_features)
-        self.drop = nn.Dropout(drop)
-        self.apply(self._init_weights)
-    def _init_weights(self, m):
-        if isinstance(m, (nn.Linear, nn.Conv2d)):
-            trunc_normal_(m.weight, std=.02)
-            if m.bias is not None: nn.init.constant_(m.bias, 0)
-    def forward(self, x_sparse, indices, B, L, H, W):
-        K = x_sparse.shape[1]
-        x = self.fc1(x_sparse)
-        x_dense = torch.zeros(B, L, x.shape[-1], device=x.device, dtype=x.dtype)
-        batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, K)
-        x_dense[batch_indices, indices] = x
-        T = L // (H * W)
-        x_spatial = x_dense.view(B * T, H, W, -1).permute(0, 3, 1, 2)
-        x_spatial = self.dwconv(x_spatial)
-        x_flat = x_spatial.permute(0, 2, 3, 1).reshape(B, L, -1)
-        x_sparse_new = x_flat[batch_indices, indices] 
-        x_sparse_new = self.act(x_sparse_new)
-        x_sparse_new = self.drop(x_sparse_new)
-        x = self.fc2(x_sparse_new)
-        x = self.drop(x)
-        return x
-
 # ==========================================
 # 增强型 Mamba 模块 (Enhanced Mamba Modules)
 # ==========================================
 
 class STMambaBlock(nn.Module):
     """
-    [稀疏感知时空 Mamba 模块 - 稀疏率退火版]
-    集成 "Sandwich" 架构，并支持根据 Epoch 动态调整稀疏率。
+    [结构化稀疏 Mamba 模块 - 重构版]
+    架构：Input -> Spatial Sparsify -> Time-Domain Mamba -> Spatial Mixing -> Densify -> Output
+    
+    核心改进：
+    1. 使用 'SpatialSparseTokenHandler'，避免破坏时间因果性。
+    2. Mamba 扫描严格限制在时间轴 T 上，每个空间点视为独立的序列。
+    3. 引入 'spatial_mixer' 在稀疏状态下进行空间信息交互。
     """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, 
                  d_state=16, d_conv=4, expand=2, use_checkpoint=False, 
                  sparse_ratio=0.0, 
-                 anneal_start_epoch=5, anneal_end_epoch=10): # [新增] 退火参数
+                 anneal_start_epoch=5, anneal_end_epoch=10):
         super().__init__()
         self.use_checkpoint = use_checkpoint
         self.target_sparse_ratio = sparse_ratio # 目标稀疏率
@@ -264,21 +242,29 @@ class STMambaBlock(nn.Module):
         
         self.norm1 = RMSNorm(dim)
         
+        # --- Mamba 配置 ---
+        # 关键修改：Mamba 现在处理的是单一空间点的"时间序列"
+        # 形状预期: [Batch_Size * K, Seq_Len=T, Dim]
         mamba_cfg = dict(d_model=dim, d_state=d_state, d_conv=d_conv, expand=expand)
         self.scan = Mamba(**mamba_cfg)
         
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = RMSNorm(dim)
         
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        
+        # --- 稀疏/混合组件 ---
         # 初始化时只要 target > 0 就实例化稀疏组件
         if self.target_sparse_ratio > 0:
-            self.mlp = SparseLocalityEnhancedMLP(dim, mlp_hidden_dim, dim, act_layer=act_layer, drop=drop)
-            # Handler 初始化时 ratio 可设为 target，实际 forward 会覆盖
-            self.sparse_handler = SparseTokenHandler(self.target_sparse_ratio)
+            self.sparse_handler = SpatialSparseTokenHandler(self.target_sparse_ratio)
+            # 空间混合层 (Spatial Mixing): 允许被选中的 K 个点之间交换信息
+            # 简单的 MLP 保持高效
+            self.spatial_mixer = nn.Sequential(
+                nn.Linear(dim, dim),
+                nn.GELU(),
+                nn.Linear(dim, dim)
+            )
         else:
-            self.mlp = LocalityEnhancedMLP(dim, mlp_hidden_dim, dim, act_layer=act_layer, drop=drop)
+            # 稠密模式下的 MLP
+            self.mlp = LocalityEnhancedMLP(dim, int(dim * mlp_ratio), dim, act_layer=act_layer, drop=drop)
             
         self.apply(self._init_weights)
 
@@ -297,117 +283,104 @@ class STMambaBlock(nn.Module):
         progress = (epoch - self.anneal_start) / (self.anneal_end - self.anneal_start)
         return self.target_sparse_ratio * progress
 
-    def forward(self, x_in, current_epoch=0): # [修改] 接收 epoch
+    def forward(self, x_in, current_epoch=0):
+        """
+        Args:
+            x_in: [B, T, C, H, W]
+            current_epoch: 当前训练轮次，用于计算稀疏率
+        """
         B, T, C, H, W = x_in.shape
         L = T * H * W
         
         # 动态计算当前稀疏率
         curr_ratio = self._get_curr_sparse_ratio(current_epoch)
         
-        # === [保留原有的重要性计算逻辑] ===
-        importance = None
-        if curr_ratio > 0:
-            x_diff = torch.zeros_like(x_in)
-            x_diff[:, 1:] = x_in[:, 1:] - x_in[:, :-1]
-            x_diff[:, 0] = x_in[:, 0] 
-            flat_x = x_in.permute(0, 1, 3, 4, 2).reshape(B, L, C)
-            flat_diff = x_diff.permute(0, 1, 3, 4, 2).reshape(B, L, C)
-            
-            alpha, beta = 1.0, 2.0 
-            importance = alpha * flat_x.norm(dim=-1) + beta * flat_diff.norm(dim=-1)
-            x = flat_x
-        else:
-            x = x_in.permute(0, 1, 3, 4, 2).reshape(B, L, C)
+        shortcut = x_in
         
-        shortcut = x
-        x_norm = self.norm1(x)
-
-        # === 稀疏计算路径 (仅当当前比率 > 0 时启用) ===
+        # === 分支 A: 结构化稀疏路径 (High Performance & Physics Aware) ===
+        # 仅当当前比率 > 0 且拥有稀疏组件时启用
         if curr_ratio > 0 and hasattr(self, 'sparse_handler'):
             # 临时覆盖 handler 的 ratio
             original_ratio = self.sparse_handler.sparse_ratio
             self.sparse_handler.sparse_ratio = curr_ratio
             
-            x_sparse, indices, _ = self.sparse_handler.sparsify(x_norm, importance_score=importance)
+            # 1. 稀疏化: [B, K, T, C]
+            # 此时保持了 T 的完整性，K 是活跃的空间点
+            # x_norm = x_in # 在 sparse_handler 内部会计算 norm
+            x_sparse, indices, shape_info = self.sparse_handler.sparsify(x_in)
             
-            # [恢复] 避免污染状态
+            # 恢复 ratio 状态
             self.sparse_handler.sparse_ratio = original_ratio
             
-            def sparse_scan(z):
-                return self.scan(z) + self.scan(z.flip([1])).flip([1])
-
-            if self.use_checkpoint and x_sparse.requires_grad:
-                mamba_out_sparse = checkpoint(sparse_scan, x_sparse, use_reentrant=False)
+            K = x_sparse.shape[1]
+            
+            # 2. 准备 Mamba 输入
+            # 将 (B, K) 合并，视作独立的 Batch，序列长度为 T
+            # [B, K, T, C] -> [B*K, T, C]
+            z_time = x_sparse.reshape(B * K, T, C)
+            z_time = self.norm1(z_time)
+            
+            # 3. Mamba 时间扫描 (Time Evolution)
+            # 仅在时间轴上进行因果推演
+            if self.use_checkpoint and z_time.requires_grad:
+                z_time = checkpoint(self.scan, z_time, use_reentrant=False)
             else:
-                mamba_out_sparse = sparse_scan(x_sparse)
+                z_time = self.scan(z_time)
+                
+            # 4. 空间混合 (Spatial Mixing)
+            # Mamba 完成后，让这 K 个点交互 (模拟平流/扩散)
+            # [B*K, T, C] -> [B, T, K, C]
+            z_space = z_time.view(B, K, T, C).permute(0, 2, 1, 3) 
+            z_space = self.norm2(z_space)
+            z_space = self.spatial_mixer(z_space) # MLP 在 C 维度操作，但在 K 维度共享权重
             
-            batch_indices = torch.arange(B, device=x.device).unsqueeze(1).expand(-1, indices.shape[1])
-            x_val_at_indices = x[batch_indices, indices]
-            mid_sparse = x_val_at_indices + self.drop_path(mamba_out_sparse)
-            mlp_in_sparse = self.norm2(mid_sparse)
-            mlp_out_sparse = self.mlp(mlp_in_sparse, indices, B, L, H, W)
+            # 5. 残差连接 + 反稀疏化
+            # 恢复形状 [B, K, T, C]
+            x_update_sparse = z_space.permute(0, 2, 1, 3) 
             
-            total_sparse_update = self.drop_path(mamba_out_sparse) + self.drop_path(mlp_out_sparse)
+            # 将更新量加回 (Dense shortcut + Sparse update)
+            # 未被选中的点 update 为 0
+            x_update_dense = self.sparse_handler.densify(x_update_sparse, indices, shape_info)
             
-            update_dense = self.sparse_handler.densify(total_sparse_update, indices, (B, L, C))
-            x = shortcut + update_dense
+            # 最终输出
+            x_out = shortcut + self.drop_path(x_update_dense)
             
+        # === 分支 B: 稠密路径 (Fallback/Warmup) ===
         else:
-            # === 稠密计算路径 ===
-            # (如果模型初始化时 sparse_ratio>0 但当前 epoch 还没到，
-            # 需要处理 self.mlp 是 SparseMLP 但走稠密路径的情况)
-            # 为了简化，这里我们假设在预热期(epoch < start)，即使 mlp 是 sparse 结构，
-            # 也通过传入全量索引来模拟稠密行为，或者如果结构不同，需要额外的兼容逻辑。
-            # 鉴于 SparseLocalityEnhancedMLP 强依赖 indices，
-            # 最简单的退火策略是：在预热期，我们强制保留所有 Token (ratio approx 0)。
+            # 兼容 Mamba 扫描逻辑，但全量计算
+            # 展平以便统一处理：这里为了利用 Mamba 的序列特性，我们将 H*W 视为 Batch
+            # [B, T, C, H, W] -> [B, H*W, T, C] -> [B*H*W, T, C]
+            x_norm = x_in.permute(0, 3, 4, 1, 2).reshape(B * H * W, T, C)
+            x_norm = self.norm1(x_norm)
             
-             # 如果处于退火初期 (curr_ratio approx 0) 但拥有 SparseMLP
-            if hasattr(self, 'sparse_handler'):
-                 # 强制 ratio 极小，几乎保留所有 token
-                 # 但仍走 sparse 逻辑以兼容 SparseMLP 的输入格式
-                 # 注意：上面的 if curr_ratio > 0 逻辑已涵盖。
-                 # 如果 curr_ratio == 0，我们需要走下面的 Scan 逻辑，但 MLP 会是个问题。
-                 # **修正方案**：为了兼容性，建议在 ratio=0 时也走上面的 sparse 分支，
-                 # 只是 sparsify 不丢弃任何 token。
-                 pass 
-
-            # 原有稠密逻辑 (适用于初始化 sparse_ratio=0 的模型)
-            def scan_multidir(z_row, B, T, H, W, C):
-                L = T * H * W
-                out_h = self.scan(z_row) + self.scan(z_row.flip([1])).flip([1])
-                z_col = z_row.view(B, T, H, W, C).permute(0, 1, 3, 2, 4).contiguous().reshape(B, L, C)
-                out_v = self.scan(z_col) + self.scan(z_col.flip([1])).flip([1])
-                out_v = out_v.view(B, T, W, H, C).permute(0, 1, 3, 2, 4).contiguous().reshape(B, L, C)
-                return out_h + out_v
-
-            if self.use_checkpoint and x.requires_grad:
-                out = checkpoint(scan_multidir, x_norm, B, T, H, W, C, use_reentrant=False)
+            # 时间扫描
+            if self.use_checkpoint and x_norm.requires_grad:
+                z_time = checkpoint(self.scan, x_norm, use_reentrant=False)
             else:
-                out = scan_multidir(x_norm, B, T, H, W, C)
+                z_time = self.scan(x_norm)
+                
+            # 还原形状
+            # [B*H*W, T, C] -> [B, T, C, H, W]
+            x_mamba = z_time.view(B, H, W, T, C).permute(0, 3, 4, 1, 2)
+            x_mid = shortcut + self.drop_path(x_mamba)
+            
+            # 空间混合 (使用全卷积/MLP)
+            # 此时使用 LocalityEnhancedMLP (带 DWConv)
+            # 需要适配 MLP 输入 [B, L, C] -> [B, T*H*W, C]
+            x_mid_flat = x_mid.permute(0, 1, 3, 4, 2).reshape(B, L, C)
+            x_mlp = self.mlp(self.norm2(x_mid_flat), H, W)
+            
+            x_out = x_mid + self.drop_path(x_mlp.view(B, T, H, W, C).permute(0, 1, 4, 2, 3))
 
-            # 注意：如果初始化是 SparseMLP 但此时走这里，会报错。
-            # 因此，若初始化了 sparse 结构，建议始终走 sparse 分支 (即使 ratio=0)。
-            # 在此不做过度复杂的兼容，假设用户设置了 sparse_ratio > 0 则始终走 sparse 分支。
-            if hasattr(self, 'sparse_handler'):
-                 # Fallback: 这种情况下不应该进入 else 分支，
-                 # 除非 curr_ratio 完全为 0。建议修改上面的判断为 `if hasattr(self, 'sparse_handler'):`
-                 # 这里仅保留原代码结构，实际使用时请确保退火逻辑能进入 sparse 分支。
-                 pass 
-
-            x = shortcut + self.drop_path(out)
-            # 只有当非 sparse 初始化时才执行普通 MLP
-            if not hasattr(self, 'sparse_handler'):
-                x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
-        
-        return x.reshape(B, T, H, W, C).permute(0, 1, 4, 2, 3).contiguous()
+        return x_out
 
 # ==========================================
-# 增强型时间投影组件 (Advective Projection - Final)
+# 增强型时间投影组件 (Advective Projection)
 # ==========================================
 
 class FlowPredictorGRU(nn.Module):
     """
-    [动态流场预测器 - GRU版 - 修复版]
+    [动态流场预测器 - GRU版]
     利用 ConvGRU 单元动态预测流场增量，并维护隐藏状态。
     """
     def __init__(self, in_channels, hidden_dim):
@@ -437,14 +410,15 @@ class FlowPredictorGRU(nn.Module):
         h_next = (1 - z) * h + z * h_tilde
         delta_flow = self.flow_head(h_next)
         
-        # [关键修复] 返回更新后的隐藏状态 h_next
         return delta_flow, h_next
 
 class AdvectiveProjection(nn.Module):
     """
     [显式平流投影层]
-    1. 支持返回流场用于物理约束。
-    2. 使用 Reflection Padding 缓解边界效应。
+    利用物理约束 (流场) 对特征进行时间推进。
+    
+    修改：
+    padding_mode='zeros'，避免物理上的"镜像反射"违背，更符合开放边界系统。
     """
     def __init__(self, dim, t_in, t_out):
         super().__init__()
@@ -467,19 +441,19 @@ class AdvectiveProjection(nn.Module):
         base_grid = torch.stack([xx, yy], dim=-1).unsqueeze(0).expand(B, -1, -1, -1)
         
         preds = []
-        flow_maps = [] # [新增] 收集流场
+        flow_maps = [] 
         
         for i in range(self.t_out):
             flow_delta, h = self.flow_predictor(curr_z, h)
             
-            # 收集归一化的流场增量 (Latent Space Flow)
+            # 收集流场增量
             flow_maps.append(flow_delta) 
             
             flow_field = flow_delta.permute(0, 2, 3, 1)
             grid = base_grid + flow_field
             
-            # [修改] padding_mode='reflection' 缓解边界消失问题
-            next_z = F.grid_sample(curr_z, grid, mode='bilinear', padding_mode='reflection', align_corners=False)
+            # [物理修正] 使用 'zeros' 填充，避免边界产生虚假回波
+            next_z = F.grid_sample(curr_z, grid, mode='bilinear', padding_mode='zeros', align_corners=False)
             
             curr_z = next_z
             preds.append(curr_z)

@@ -35,7 +35,9 @@ class MeteoMambaModule(LightningModule):
         hid_T: int = 256,
         N_S: int = 4,
         N_T: int = 8,
-        mamba_sparse_ratio: float = 0.5, # 目标稀疏率
+        mamba_sparse_ratio: float = 0.5,
+        anneal_start_epoch: int = 5,
+        anneal_end_epoch: int = 15, 
         
         # --- 优化器超参 ---
         lr: float = 1e-3,
@@ -62,7 +64,9 @@ class MeteoMambaModule(LightningModule):
             hid_T=hid_T,
             N_S=N_S,
             N_T=N_T,
-            mamba_sparse_ratio=mamba_sparse_ratio, # [稀疏化] 传入目标稀疏率
+            mamba_sparse_ratio=mamba_sparse_ratio,
+            anneal_start_epoch=anneal_start_epoch,
+            anneal_end_epoch=anneal_end_epoch,
             **kwargs
         )
         

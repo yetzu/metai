@@ -9,7 +9,7 @@ from .modules import (
     ResizeConv, 
     STMambaBlock, 
     TimeAlignBlock,
-    AdvectiveProjection  # [核心组件] 非线性动态平流投影层
+    AdvectiveProjection
 )
 
 def sampling_generator(N, reverse=False):
@@ -104,10 +104,13 @@ class EvolutionNet(nn.Module):
     """
     演变网络 (Evolution Network)
     核心模块，利用 Mamba (SSM) 建模时空序列的演变规律。
+    
+    [修改] 增加了 anneal_start_epoch 和 anneal_end_epoch 参数传递
     """
     def __init__(self, dim_in, dim_hid, num_layers, drop=0., drop_path=0., 
                  mamba_kwargs={}, use_checkpoint=True, max_t=64, input_resolution=(64, 64),
-                 sparse_ratio=0.0): # [参数更新] 接收稀疏率
+                 sparse_ratio=0.0,
+                 anneal_start_epoch=5, anneal_end_epoch=10): # [新增参数]
         super().__init__()
         # 特征投影层
         self.proj_in = nn.Linear(dim_in, dim_hid)
@@ -132,19 +135,20 @@ class EvolutionNet(nn.Module):
         dpr = [x.item() for x in torch.linspace(1e-2, drop_path, num_layers)]
         
         # 堆叠 STMambaBlock
-        # 将 sparse_ratio 传递给每个 Block，实现计算加速
         self.layers = nn.ModuleList([
             STMambaBlock(
                 dim_hid, 
                 drop=drop, 
                 drop_path=dpr[i], 
                 use_checkpoint=use_checkpoint,
-                sparse_ratio=sparse_ratio, # [传递目标稀疏率]
+                sparse_ratio=sparse_ratio,
+                anneal_start_epoch=anneal_start_epoch, # [传递]
+                anneal_end_epoch=anneal_end_epoch,     # [传递]
                 **mamba_kwargs
             ) for i in range(num_layers)
         ])
 
-    def forward(self, x, current_epoch=0): # [修改] 接收 epoch 参数
+    def forward(self, x, current_epoch=0):
         # 输入 x: [B, T, C, H, W]
         B, T, C, H, W = x.shape
         
@@ -155,7 +159,6 @@ class EvolutionNet(nn.Module):
         
         # --- 位置编码插值逻辑 ---
         # 1. 处理时间提示 (Time Prompt) 和 时间位置编码 (Time PE)
-        # 如果当前序列长度 T 小于预设 max_t，直接切片；否则进行线性插值
         if T <= self.time_prompt.shape[1]:
             t_prompt = self.time_prompt[:, :T, ...]
             t_pos = self.pos_embed_t[:, :T, ...]
@@ -170,7 +173,6 @@ class EvolutionNet(nn.Module):
             ).permute(0,2,1).unsqueeze(-1).unsqueeze(-1)
 
         # 2. 处理空间位置编码 (Spatial PE)
-        # 如果特征图尺寸与预设不符，进行双线性插值
         if (H, W) != self.pos_embed_s.shape[-2:]:
             s_pos = F.interpolate(
                 self.pos_embed_s, size=(H, W), mode='bilinear', align_corners=False
@@ -183,7 +185,7 @@ class EvolutionNet(nn.Module):
         
         # 通过 Mamba 层进行演变
         for layer in self.layers:
-            # [修改] 将 current_epoch 传递给 Block 用于稀疏率退火
+            # 将 current_epoch 传递给 Block 用于稀疏率退火
             x = layer(x, current_epoch=current_epoch)
             
         # 输出投影
@@ -212,7 +214,10 @@ class MeteoMamba(nn.Module):
                  mamba_d_conv=4, 
                  mamba_expand=2,
                  use_checkpoint=True,
-                 mamba_sparse_ratio=0.5, # [新增] 接收配置中的稀疏率
+                 mamba_sparse_ratio=0.5, 
+                 # [新增] 接收退火参数，提供默认值
+                 anneal_start_epoch=5,
+                 anneal_end_epoch=10,
                  **kwargs):
         super().__init__()
         
@@ -230,7 +235,7 @@ class MeteoMamba(nn.Module):
         # 1. 初始化编码器
         self.enc = Encoder(C, hid_S, N_S, spatio_kernel_enc)
         
-        # 计算演变阶段的空间分辨率 (假设 N_S=4 意味着下采样 2 次，即 4 倍)
+        # 计算演变阶段的空间分辨率
         ds_factor = 2 ** (N_S // 2) 
         evo_res = (H // ds_factor, W // ds_factor)
 
@@ -241,12 +246,12 @@ class MeteoMamba(nn.Module):
             mamba_kwargs=mamba_kwargs,
             use_checkpoint=use_checkpoint,
             input_resolution=evo_res,
-            sparse_ratio=mamba_sparse_ratio # [传递稀疏率]
+            sparse_ratio=mamba_sparse_ratio,
+            anneal_start_epoch=anneal_start_epoch, # [传递]
+            anneal_end_epoch=anneal_end_epoch      # [传递]
         )
         
-        # 3. 显式平流时间投影层 (Advective Time Projection)
-        # 替代原有的 Conv1d 投影。
-        # 这里的 dim 对应 Encoder 的输出通道数 hid_S
+        # 3. 显式平流时间投影层
         self.latent_time_proj = AdvectiveProjection(
             dim=hid_S, 
             t_in=T_in, 
@@ -256,52 +261,39 @@ class MeteoMamba(nn.Module):
         # 4. 初始化解码器
         self.dec = Decoder(hid_S, self.out_channels, N_S, spatio_kernel_dec)
         
-        # 5. 跳跃连接投影层 (用于对齐 Encoder 特征的时间维度)
+        # 5. 跳跃连接投影层
         self.skip_proj = TimeAlignBlock(T_in, self.T_out, hid_S)
-        
-        # 注：AdvectiveProjection 内部已处理初始化，无需额外的 _init_time_proj
 
-    def forward(self, x_raw, current_epoch=0): # [修改] 接收 epoch
+    def forward(self, x_raw, current_epoch=0):
         # x_raw 输入形状: [B, T_in, C_in, H, W]
         B, T_in, C_in, H, W = x_raw.shape
         
         # 1. 编码阶段 (Encoder)
-        # 将时空数据编码为潜在特征和浅层特征 (用于Skip)
-        # embed: [B*T_in, C_hid, H_, W_]
         embed, skip = self.enc(x_raw) 
         _, C_hid, H_, W_ = embed.shape 
         
         # 2. 演变阶段 (Evolution)
-        # 恢复时间维度，通过 Mamba 建模时空演变
-        # z: [B, T_in, C_hid, H_, W_]
         z = embed.view(B, T_in, C_hid, H_, W_)
-        # [修改] 传递 current_epoch
         z = self.evolution(z, current_epoch=current_epoch)
         
         # 3. 时间投影阶段 (Time Projection)
-        # 使用 AdvectiveProjection 进行非线性动态流引导的特征变换
-        # [修改] 接收返回的 flows 用于 Physics Loss
+        # 返回 z 和 flows
         z, flows = self.latent_time_proj(z) 
         
         # 重塑为 Decoder 需要的格式: [B*T_out, C_hid, H_, W_]
         z = z.view(B * self.T_out, C_hid, H_, W_)
         
         # 4. 处理跳跃连接 (Skip Connection)
-        # 将 Encoder 的浅层特征的时间维度也从 T_in 投影到 T_out
         skip = skip.view(B, T_in, C_hid, H, W)
         skip_out = self.skip_proj(skip) 
         skip_out = skip_out.view(B * self.T_out, C_hid, H, W)
         
         # 5. 解码阶段 (Decoder)
-        # 结合演变后的特征和跳跃连接，恢复空间分辨率
-        # Y_diff: [B*T_out, C_out, H, W] -> [B, T_out, C_out, H, W]
         Y_diff = self.dec(z, skip_out)
         Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         
         # 6. 残差连接 (Residual Connection)
-        # 预测模式：当前帧 = 最后一帧观测值 + 预测的变化量
         last_frame = x_raw[:, -1:, :self.out_channels, :, :].detach() 
         Y = last_frame + Y_diff
         
-        # [修改] 返回 Y 和 flows
         return Y, flows
