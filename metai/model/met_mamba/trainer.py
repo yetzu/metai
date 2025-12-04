@@ -106,8 +106,8 @@ class MeteoMambaModule(l.LightningModule):
             total_epochs = float(self.config.max_epochs)
             progress = self.current_epoch / total_epochs
             
-            start_ratio = 0.1  # 热身期
-            end_ratio = 0.5    # 增长期结束
+            start_ratio = 0.2  # 热身期
+            end_ratio = 0.7    # 增长期结束
             min_seq = 10       # 起始长度
             max_seq = self.config.pred_seq_len
             

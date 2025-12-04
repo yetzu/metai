@@ -482,17 +482,44 @@ def warp(x, flow):
     output = F.grid_sample(x, vgrid, mode='bilinear', padding_mode='border', align_corners=True)
     return output
 
+# class SparsityGate(nn.Module):
+#     """
+#     [稀疏门控]
+#     生成一个 Importance Mask，抑制低价值区域（背景）的特征更新，
+#     让模型专注于有云区域的演变。
+#     """
+#     def __init__(self, dim):
+#         super().__init__()
+#         self.gate = nn.Sequential(
+#             nn.Conv2d(dim, dim // 4, 3, 1, 1),
+#             nn.SiLU(inplace=True),
+#             nn.Conv2d(dim // 4, 1, 1),
+#             nn.Sigmoid()
+#         )
+
+#     def forward(self, x):
+#         # Mask: [B, 1, H, W], 范围 [0, 1]
+#         return self.gate(x)
+
 class SparsityGate(nn.Module):
     """
-    [稀疏门控]
-    生成一个 Importance Mask，抑制低价值区域（背景）的特征更新，
-    让模型专注于有云区域的演变。
+    [稀疏门控 - 增强版]
+    引入膨胀卷积 (Dilated Conv) 扩大感受野。
+    目的：防止孤立的强回波点（极值）因为感受野不足而被误判为背景噪声。
     """
     def __init__(self, dim):
         super().__init__()
         self.gate = nn.Sequential(
+            # 第一层：基础特征提取
             nn.Conv2d(dim, dim // 4, 3, 1, 1),
             nn.SiLU(inplace=True),
+            
+            # [新增] 第二层：膨胀卷积 (Dilation=2)
+            # 感受野从 3x3 扩大到 7x7，能更好地感知"孤立点"周围的上下文
+            nn.Conv2d(dim // 4, dim // 4, 3, 1, 2, dilation=2),
+            nn.SiLU(inplace=True),
+            
+            # 第三层：输出 Mask
             nn.Conv2d(dim // 4, 1, 1),
             nn.Sigmoid()
         )
