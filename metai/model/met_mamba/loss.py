@@ -116,7 +116,7 @@ class SpectralLoss(nn.Module):
             pred = pred * mask
             target = target * mask
 
-        # 2D 实数 FFT 变换
+        # 2D 实数 FFT 变换 (在 H, W 维度)
         fft_pred = torch.fft.rfft2(pred, dim=(-2, -1), norm='ortho')
         fft_target = torch.fft.rfft2(target, dim=(-2, -1), norm='ortho')
 
@@ -152,9 +152,16 @@ class PhysicsConstraintsLoss(nn.Module):
             pred_masked = pred
             target_masked = target
             
-        b, t, h, w = pred.shape
-        p_reshaped = pred_masked.view(b * t, 1, h, w)
-        t_reshaped = target_masked.view(b * t, 1, h, w)
+        # [Fix: Dimension Handling]
+        # 统一处理 5D 输入 [B, T, C, H, W]
+        # 如果输入是 4D [B, T, H, W]，尝试 unsqueeze
+        if pred_masked.ndim == 4:
+            pred_masked = pred_masked.unsqueeze(2)
+            target_masked = target_masked.unsqueeze(2)
+            
+        b, t, c, h, w = pred_masked.shape
+        p_reshaped = pred_masked.view(b * t, c, h, w)
+        t_reshaped = target_masked.view(b * t, c, h, w)
         
         p_local = F.avg_pool2d(p_reshaped, kernel_size=self.pool_size, stride=self.pool_size)
         t_local = F.avg_pool2d(t_reshaped, kernel_size=self.pool_size, stride=self.pool_size)
@@ -172,6 +179,10 @@ class PhysicsConstraintsLoss(nn.Module):
             src_imgs = torch.cat([prev_frame, target[:, :-1]], dim=1) 
             tgt_imgs = target
             
+            # [Fix: Dimension Handling] 确保 5D 解包
+            if tgt_imgs.ndim == 4: tgt_imgs = tgt_imgs.unsqueeze(2)
+            if src_imgs.ndim == 4: src_imgs = src_imgs.unsqueeze(2)
+
             B, T, C, H, W = tgt_imgs.shape
             
             # 上采样流场
@@ -197,6 +208,8 @@ class PhysicsConstraintsLoss(nn.Module):
             warped = warped_flat.view(B, T, C, H, W)
             
             if mask is not None:
+                # 确保 mask 维度匹配
+                if mask.ndim == 4: mask = mask.unsqueeze(2)
                 loss_warp = F.l1_loss(warped * mask, tgt_imgs * mask)
             else:
                 loss_warp = F.l1_loss(warped, tgt_imgs)
@@ -249,8 +262,6 @@ class HybridLoss(nn.Module):
     """
     [智能混合损失 - 内容重建部分]
     基于 Kendall's Multi-Task Learning 策略，增加正则化防止权重坍塌。
-    
-    注意：此类仅计算 Content Loss，不包含 Adversarial Loss。
     """
     def __init__(self, 
                  use_temporal_weight: bool = True,
@@ -272,25 +283,29 @@ class HybridLoss(nn.Module):
                 flow: Optional[torch.Tensor] = None, 
                 prev_frame: Optional[torch.Tensor] = None,
                 mask: Optional[torch.Tensor] = None, 
+                current_epoch: int = 0, # [Add] 接收 current_epoch
                 **kwargs) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         
-        # 维度兼容性处理
-        if pred.ndim == 5: pred = pred.squeeze(2)
-        if target.ndim == 5: target = target.squeeze(2)
-        if prev_frame is not None and prev_frame.ndim == 5: prev_frame = prev_frame.squeeze(2)
-        if mask is not None and mask.ndim == 5: mask = mask.squeeze(2)
-
+        # [Fix] 移除激进的 Squeeze 操作，保持 5D [B, T, C, H, W]
+        # 这样能保证 PhysicsConstraintsLoss 正确解包
+        
         # 1. 准备时间权重
         extra_weights = None
         if self.use_temporal_weight:
             T = pred.shape[1]
-            extra_weights = torch.linspace(1.0, 2.0, steps=T, device=pred.device).view(1, T, 1, 1)
+            extra_weights = torch.linspace(1.0, 2.0, steps=T, device=pred.device).view(1, T, 1, 1, 1) # 适配 5D
 
         # 2. 计算各项原始 Loss
         l_mse = self.loss_mse(pred, target, mask, extra_weights)
         l_csi = self.loss_csi(pred, target, mask)
         l_spec = self.loss_spectral(pred, target, mask)
+        
+        # [Add] 物理约束 Warmup: 前 5 个 Epoch 权重打折，防止初始梯度过大
+        physics_warmup = min(1.0, current_epoch / 5.0) if current_epoch < 5 else 1.0
+        
         l_cons, l_warp = self.loss_physics(pred, target, flow, prev_frame, mask)
+        l_cons = l_cons * physics_warmup
+        l_warp = l_warp * physics_warmup
         
         losses = torch.stack([l_mse, l_csi, l_spec, l_cons, l_warp])
         
