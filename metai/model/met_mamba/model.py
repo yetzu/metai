@@ -2,30 +2,26 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from timm.layers.weight_init import trunc_normal_
+
 from .modules import (
     ConvSC, 
     ResizeConv, 
     STMambaBlock, 
-    TimeAlignBlock,
-    AdvectiveProjection
+    TimeAlignBlock, 
+    AdvectiveProjection, 
+    PosteriorNet
 )
 
 # ==============================================================================
-# 辅助函数 (Helper Functions)
-# ==============================================================================
-
-def sampling_generator(N, reverse=False):
-    samplings = [False, True] * (N // 2)
-    if reverse: return list(reversed(samplings[:N]))
-    else: return samplings[:N]
-
-# ==============================================================================
-# 编码器与解码器 (Encoder & Decoder) - 保持不变
+# 编码器与解码器
 # ==============================================================================
 
 class Encoder(nn.Module):
+    """
+    空间编码器：将高分辨率观测数据压缩为低维隐特征。
+    结构：Stem -> 多层下采样 ConvSC
+    """
     def __init__(self, C_in, C_hid, N_S, spatio_kernel):
         super().__init__()
         self.stem = nn.Sequential(
@@ -33,192 +29,138 @@ class Encoder(nn.Module):
             nn.GroupNorm(2, C_hid),
             nn.SiLU(inplace=True)
         )
-        samplings = sampling_generator(N_S)
-        self.enc = nn.Sequential(
-            ConvSC(C_hid, C_hid, spatio_kernel, downsampling=samplings[0]),
-            *[ConvSC(C_hid, C_hid, spatio_kernel, downsampling=s) for s in samplings[1:]]
-        )
+        
+        # 生成下采样控制序列 (True/False)
+        samplings = [False, True] * (N_S // 2)
+        
+        layers = []
+        # 第一层可能涉及下采样
+        layers.append(ConvSC(C_hid, C_hid, spatio_kernel, downsampling=samplings[0]))
+        # 后续层
+        for s in samplings[1:]:
+            layers.append(ConvSC(C_hid, C_hid, spatio_kernel, downsampling=s))
+            
+        self.enc = nn.Sequential(*layers)
 
     def forward(self, x):
+        # Input: [B, T, C, H, W]
         B, T, C, H, W = x.shape
         x = x.view(B * T, C, H, W)
+        
         x = self.stem(x) 
-        enc1 = self.enc[0](x)
+        enc1 = self.enc[0](x) # 保留浅层特征用于 Skip Connection
+        
         latent = enc1
         for i in range(1, len(self.enc)):
             latent = self.enc[i](latent)
-        return latent, enc1
-
+            
+        return latent, enc1 # latent: [B*T, C_hid, H', W']
 
 class Decoder(nn.Module):
+    """
+    空间解码器：将演变后的隐特征恢复为预测图。
+    结构：多层上采样 ConvSC -> Readout
+    """
     def __init__(self, C_hid, C_out, N_S, spatio_kernel):
         super().__init__()
-        samplings = sampling_generator(N_S, reverse=True)
+        # 生成上采样控制序列 (反向)
+        samplings = list(reversed([False, True] * (N_S // 2)))
+        
         layers = []
         for i, s in enumerate(samplings):
             if i < len(samplings) - 2:
                 layers.append(ConvSC(C_hid, C_hid, spatio_kernel, upsampling=s))
             else:
-                if s: 
-                    layers.append(ResizeConv(C_hid, C_hid, spatio_kernel))
-                else:
-                    layers.append(ConvSC(C_hid, C_hid, spatio_kernel, upsampling=False))
+                # 倒数第二层处理
+                if s: layers.append(ResizeConv(C_hid, C_hid, spatio_kernel))
+                else: layers.append(ConvSC(C_hid, C_hid, spatio_kernel, upsampling=False))
                     
         self.dec = nn.Sequential(*layers)
         self.readout = nn.Conv2d(C_hid, C_out, 1)
 
     def forward(self, hid, skip=None):
+        # 解码主体
         for i in range(0, len(self.dec)-1):
             hid = self.dec[i](hid)
+            
+        # 跳跃连接融合 (最后几层前)
         if skip is not None:
             hid = hid + skip
+            
+        # 最后一层与输出投影
         Y = self.dec[-1](hid)
         return self.readout(Y)
 
 # ==============================================================================
-# 演变网络 (EvolutionNet) - [REFACTORED]
+# 演变网络 (EvolutionNet)
 # ==============================================================================
 
 class EvolutionNet(nn.Module):
     """
-    [改进版 v2.0] 全序列自回归演变网络
-    特性：
-    1. 引入 future_tokens，将序列扩展为 T_in + T_out。
-    2. Mamba 负责在隐空间内进行全序列的非线性生消演变。
+    时空演变网络核心。
+    功能：结合 CVAE 隐变量 z，利用 STMamba 推演未来特征。
     """
-    def __init__(self, dim_in, dim_hid, num_layers, drop=0., drop_path=0., 
-                 mamba_kwargs={}, use_checkpoint=True, max_t=64, input_resolution=(64, 64),
-                 sparse_ratio=0.0,
-                 anneal_start_epoch=5, anneal_end_epoch=10,
-                 out_seq_len=20): # [NEW] 增加输出序列长度参数
+    def __init__(self, dim, num_layers, out_seq_len, noise_dim=32, drop_path=0.1, **kwargs):
         super().__init__()
+        self.noise_dim = noise_dim
         
-        # 1. 噪声投影层
-        self.noise_dim = 32
-        self.noise_proj = nn.Linear(self.noise_dim, dim_hid) 
-        nn.init.zeros_(self.noise_proj.weight)
-        nn.init.zeros_(self.noise_proj.bias)
+        # 1. 噪声投影层：将隐变量 z 映射到特征维度
+        self.z_proj = nn.Linear(noise_dim, dim)
         
-        # 2. 特征投影
-        self.proj_in = nn.Linear(dim_in, dim_hid)
-        self.proj_out = nn.Linear(dim_hid, dim_in)
-        
-        # [NEW] 3. 未来查询向量 (Learnable Query Tokens)
-        # 用于填补未来 T_out 的空缺，作为 Mamba 预测未来的载体
-        self.future_tokens = nn.Parameter(torch.zeros(1, out_seq_len, dim_hid, 1, 1))
+        # 2. 未来查询向量 (Learned Queries)：承载未来预测的容器
+        self.future_tokens = nn.Parameter(torch.zeros(1, out_seq_len, dim, 1, 1))
         trunc_normal_(self.future_tokens, std=0.02)
         
-        # 4. 位置编码 (Time & Space PE)
-        # 扩大 max_t 以支持更长的预测序列
-        max_t = max(max_t, 32 + out_seq_len) 
-        self.pos_embed_t = nn.Parameter(torch.zeros(1, max_t, dim_hid, 1, 1)) 
-        H_feat, W_feat = input_resolution
-        self.pos_embed_s = nn.Parameter(torch.zeros(1, 1, dim_hid, H_feat, W_feat)) 
-        self.time_prompt = nn.Parameter(torch.zeros(1, max_t, dim_hid, 1, 1))
-
+        # 3. 时间位置编码
+        self.pos_embed_t = nn.Parameter(torch.zeros(1, 64, dim, 1, 1)) 
         trunc_normal_(self.pos_embed_t, std=0.02)
-        trunc_normal_(self.pos_embed_s, std=0.02)
-        trunc_normal_(self.time_prompt, std=0.02)
         
-        # 5. 堆叠 STMamba Block
+        # 4. 堆叠 STMamba Block
         dpr = [x.item() for x in torch.linspace(1e-2, drop_path, num_layers)]
         self.layers = nn.ModuleList([
-            STMambaBlock(
-                dim_hid, 
-                drop=drop, 
-                drop_path=dpr[i], 
-                use_checkpoint=use_checkpoint,
-                sparse_ratio=sparse_ratio,
-                anneal_start_epoch=anneal_start_epoch, 
-                anneal_end_epoch=anneal_end_epoch,     
-                **mamba_kwargs
-            ) for i in range(num_layers)
+            STMambaBlock(dim, drop_path=dpr[i], **kwargs) for i in range(num_layers)
         ])
 
-    def forward(self, x, current_epoch=0):
+    def forward(self, x_hist, z_sample):
         """
         Args:
-            x: [B, T_in, C, H, W] 历史特征
+            x_hist: [B, T_in, C, H, W] 历史特征
+            z_sample: [B, noise_dim] 采样的隐变量
         Returns:
-            z_history: [B, T_in, C, H, W] 演变后的历史特征
-            z_future:  [B, T_out, C, H, W] 演变出的未来特征
+            x_hist_out, x_future_out
         """
-        B, T_in, C, H, W = x.shape
+        B, T_in, C, H, W = x_hist.shape
         T_out = self.future_tokens.shape[1]
         
-        # 1. 噪声生成 (仅注入历史部分，或者也可以注入未来，这里保持原逻辑注入输入)
-        if self.training:
-            noise = torch.randn(B, T_in, self.noise_dim, device=x.device)
-        else:
-            noise = torch.zeros(B, T_in, self.noise_dim, device=x.device)
-        noise_emb = self.noise_proj(noise).unsqueeze(3).unsqueeze(3)
+        # 1. 注入噪声 (Conditioning)
+        # z 广播到全图，代表全局环境不确定性
+        z_emb = self.z_proj(z_sample).view(B, 1, C, 1, 1)
         
-        # 2. 特征投影
-        x = x.permute(0, 1, 3, 4, 2).contiguous() # [B, T, H, W, C]
-        x = self.proj_in(x)
-        x = x.permute(0, 1, 4, 2, 3).contiguous() # [B, T, C_hid, H, W]
+        x_hist = x_hist + z_emb
+        x_future = self.future_tokens.expand(B, -1, -1, H, W) + z_emb
         
-        # 3. 融合噪声
-        x = x + noise_emb
-        
-        # [NEW] 4. 序列拼接 (Concatenate History + Future Query)
-        # 扩展 future_tokens 到当前 Batch
-        future_queries = self.future_tokens.expand(B, -1, -1, H, W)
-        x_seq = torch.cat([x, future_queries], dim=1) # [B, T_total, C_hid, H, W]
-        
+        # 2. 序列拼接：[History, Future]
+        x_seq = torch.cat([x_hist, x_future], dim=1) # [B, T_total, C, H, W]
         T_total = x_seq.shape[1]
         
-        # 5. 位置编码插值与叠加
-        # Time PE (适配 T_total)
-        if T_total <= self.time_prompt.shape[1]:
-            t_prompt = self.time_prompt[:, :T_total, ...]
-            t_pos = self.pos_embed_t[:, :T_total, ...]
-        else:
-            t_prompt = F.interpolate(
-                self.time_prompt.squeeze(-1).squeeze(-1).permute(0,2,1), 
-                size=T_total, mode='linear'
-            ).permute(0,2,1).unsqueeze(-1).unsqueeze(-1)
-            t_pos = F.interpolate(
-                self.pos_embed_t.squeeze(-1).squeeze(-1).permute(0,2,1), 
-                size=T_total, mode='linear'
-            ).permute(0,2,1).unsqueeze(-1).unsqueeze(-1)
-
-        # Spatial PE
-        if (H, W) != self.pos_embed_s.shape[-2:]:
-            s_pos = F.interpolate(
-                self.pos_embed_s, size=(H, W), mode='bilinear', align_corners=False
-            )
-        else:
-            s_pos = self.pos_embed_s
-
-        x_seq = x_seq + t_prompt + t_pos + s_pos
+        # 3. 叠加位置编码
+        if T_total <= self.pos_embed_t.shape[1]:
+            x_seq = x_seq + self.pos_embed_t[:, :T_total]
         
-        # 6. 通过 STMamba 层 (一次性处理历史+未来)
+        # 4. Mamba 深度演变
         for layer in self.layers:
-            x_seq = layer(x_seq, current_epoch=current_epoch)
+            x_seq = layer(x_seq)
             
-        # 7. 输出投影
-        x_seq = x_seq.permute(0, 1, 3, 4, 2).contiguous()
-        x_seq = self.proj_out(x_seq)
-        x_seq = x_seq.permute(0, 1, 4, 2, 3).contiguous()
-        
-        # 8. 分离历史与未来
-        z_history = x_seq[:, :T_in]
-        z_future = x_seq[:, T_in:] 
-        
-        return z_history, z_future
+        return x_seq[:, :T_in], x_seq[:, T_in:]
 
 # ==============================================================================
-# 主模型 (Main Model Class) - [REFACTORED]
+# 主模型 (MeteoMamba)
 # ==============================================================================
 
 class MeteoMamba(nn.Module):
     """
-    [MeteoMamba v2.0 Final] 
-    1. Encoder: 提取空间特征
-    2. EvolutionNet: Autoregressive Mamba (全序列推演)
-    3. Advection: 物理约束 (作为 Residual 分支)
-    4. Decoder: 特征恢复
+    MeteoMamba V3 主模型架构。
+    集成：Encoder -> CVAE -> Evolution(Mamba) + Advection -> Fusion -> Decoder
     """
     def __init__(self, 
                  in_shape, in_seq_len, out_seq_len, out_channels=1,
@@ -226,93 +168,125 @@ class MeteoMamba(nn.Module):
                  spatio_kernel_enc=3, spatio_kernel_dec=3, 
                  mamba_d_state=16, mamba_d_conv=4, mamba_expand=2,
                  use_checkpoint=True,
-                 mamba_sparse_ratio=0.5, 
-                 anneal_start_epoch=5, anneal_end_epoch=10,
                  **kwargs):
         super().__init__()
         
         C, H, W = in_shape
-        T_in = in_seq_len
+        self.T_in = in_seq_len
         self.T_out = out_seq_len
         self.out_channels = out_channels
+        self.noise_dim = 32
         
         mamba_kwargs = {
             'd_state': mamba_d_state,
             'd_conv': mamba_d_conv,
-            'expand': mamba_expand
+            'expand': mamba_expand,
+            'use_checkpoint': use_checkpoint
         }
         
-        # 1. 初始化编码器
+        # 1. 编码器
         self.enc = Encoder(C, hid_S, N_S, spatio_kernel_enc)
         
-        ds_factor = 2 ** (N_S // 2) 
-        evo_res = (H // ds_factor, W // ds_factor)
-
-        # 2. 初始化演变网络 (传入 out_seq_len)
+        # 2. CVAE 网络
+        # Prior P(z|X): 仅从历史预测 z (推理时使用)
+        self.prior_net = PosteriorNet(hid_S, in_seq_len, self.noise_dim)
+        # Posterior Q(z|X,Y): 从历史+未来预测 z (训练时使用)
+        self.posterior_net = PosteriorNet(hid_S, in_seq_len + out_seq_len, self.noise_dim)
+        
+        # 3. 演变网络
         self.evolution = EvolutionNet(
-            hid_S, hid_T, N_T, 
-            drop=0.0, drop_path=0.1, 
-            mamba_kwargs=mamba_kwargs,
-            use_checkpoint=use_checkpoint,
-            input_resolution=evo_res,
-            sparse_ratio=mamba_sparse_ratio,
-            anneal_start_epoch=anneal_start_epoch, 
-            anneal_end_epoch=anneal_end_epoch,
-            out_seq_len=out_seq_len  # [NEW]
+            hid_S, N_T, 
+            noise_dim=self.noise_dim,
+            out_seq_len=out_seq_len,
+            **mamba_kwargs
         )
         
-        # 3. 显式平流时间投影层 (物理约束)
-        self.latent_time_proj = AdvectiveProjection(
-            dim=hid_S, 
-            t_in=T_in, 
-            t_out=self.T_out
-        )
+        # 4. 物理平流分支
+        self.advection = AdvectiveProjection(hid_S, in_seq_len, out_seq_len)
         
-        # 4. 初始化解码器
-        self.dec = Decoder(hid_S, self.out_channels, N_S, spatio_kernel_dec)
-        
-        # 5. 跳跃连接投影层
-        self.skip_proj = TimeAlignBlock(T_in, self.T_out, hid_S)
+        # 5. 解码器与跳跃连接
+        self.dec = Decoder(hid_S, out_channels, N_S, spatio_kernel_dec)
+        self.skip_proj = TimeAlignBlock(in_seq_len, out_seq_len, hid_S)
 
-    def forward(self, x_raw, current_epoch=0):
+    def reparameterize(self, mu, logvar):
+        """重参数化技巧: z = mu + sigma * epsilon"""
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x_raw, y_target=None):
         """
+        Args:
+            x_raw: [B, T_in, C, H, W] 输入序列
+            y_target: [B, T_out, C, H, W] 目标序列 (仅训练时提供，用于 CVAE 学习)
         Returns:
-            Y: [B, T_out, C_out, H, W]
-            flows: [B, T_out, 2, H, W]
+            Y_pred, flows, kl_loss (仅训练时)
         """
         B, T_in, C_in, H, W = x_raw.shape
         
         # 1. 编码阶段
-        embed, skip = self.enc(x_raw) 
-        _, C_hid, H_, W_ = embed.shape 
+        # [B, T, C, H, W] -> [B, T, hid_S, H', W']
+        embed_hist, skip = self.enc(x_raw) 
+        _, C_hid, H_, W_ = embed_hist.shape[1:]
         
-        # 2. 演变阶段 (Mamba Autoregressive)
-        # z_hist: 历史特征演变, z_future_mamba: Mamba预测的未来特征(含生消)
-        z = embed.view(B, T_in, C_hid, H_, W_)
-        z_hist, z_future_mamba = self.evolution(z, current_epoch=current_epoch)
+        # 调整维度用于 3D 卷积: [B, C, T, H, W]
+        embed_hist_seq = embed_hist.view(B, T_in, C_hid, H_, W_).permute(0, 2, 1, 3, 4)
         
-        # 3. 物理平流阶段 (Advection Constraint)
-        # 基于历史最后一帧 z_hist[:, -1] 递归推导纯平流预测 z_adv
-        z_adv, flows = self.latent_time_proj(z_hist) 
+        kl_loss = torch.tensor(0.0, device=x_raw.device)
+        z = None
         
-        # 4. 物理-深度残差融合 (Physics-Residual Fusion)
-        # 最终特征 = Mamba预测(非线性变化) + Advection预测(平流惯性)
-        z_combined = z_future_mamba + z_adv
+        # 2. CVAE 概率推断逻辑
+        if self.training and y_target is not None:
+            # === 训练模式 (Posterior 引导) ===
+            with torch.no_grad():
+                # 编码未来真值 (不传梯度，仅作参考)
+                embed_future, _ = self.enc(y_target)
+                embed_future_seq = embed_future.view(B, self.T_out, C_hid, H_, W_).permute(0, 2, 1, 3, 4)
+            
+            # Posterior Q(z|X,Y)
+            embed_all = torch.cat([embed_hist_seq, embed_future_seq], dim=2)
+            post_mu, post_logvar = self.posterior_net(embed_all)
+            z = self.reparameterize(post_mu, post_logvar)
+            
+            # Prior P(z|X)
+            prior_mu, prior_logvar = self.prior_net(embed_hist_seq)
+            
+            # KL Loss: 让 Posterior 逼近 Prior
+            kl_loss = 0.5 * torch.sum(
+                prior_logvar - post_logvar - 1 + 
+                (post_logvar.exp() + (post_mu - prior_mu).pow(2)) / prior_logvar.exp()
+            )
+            kl_loss = kl_loss / B
+            
+        else:
+            # === 推理模式 (Prior 采样) ===
+            prior_mu, prior_logvar = self.prior_net(embed_hist_seq)
+            z = self.reparameterize(prior_mu, prior_logvar)
+
+        # 3. 演变阶段
+        z_embed_in = embed_hist.view(B, T_in, C_hid, H_, W_)
+        z_hist_out, z_future_out = self.evolution(z_embed_in, z)
         
-        # 5. 解码准备
-        z_combined = z_combined.view(B * self.T_out, C_hid, H_, W_)
+        # 4. 物理平流阶段
+        z_adv, flows = self.advection(z_hist_out)
         
-        # 6. 处理跳跃连接
+        # 5. 特征融合
+        z_combined = z_future_out + z_adv
+        
+        # 6. 解码阶段
+        z_combined_flat = z_combined.reshape(B * self.T_out, C_hid, H_, W_)
+        
+        # Skip Connection 时间对齐
         skip = skip.view(B, T_in, C_hid, H, W)
-        skip_out = self.skip_proj(skip) 
-        skip_out = skip_out.view(B * self.T_out, C_hid, H, W)
+        skip_out = self.skip_proj(skip).view(B * self.T_out, C_hid, H, W)
         
-        # 7. 解码阶段
-        Y_diff = self.dec(z_combined, skip_out)
+        Y_diff = self.dec(z_combined_flat, skip_out)
         Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         
-        # 8. 残差连接 (预测增量)
-        last_frame = x_raw[:, -1:, :self.out_channels, :, :].detach() 
+        # 7. 残差输出
+        last_frame = x_raw[:, -1:, :self.out_channels, :, :].detach()
         Y = last_frame + Y_diff
         
+        if self.training:
+            return Y, flows, kl_loss
         return Y, flows
