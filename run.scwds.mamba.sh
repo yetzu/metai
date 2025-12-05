@@ -28,10 +28,8 @@ BATCH_SIZE=4
 case $MODE in
     "train")
         echo "--------------------------------------------------------"
-        echo " [MetAI] Starting Training (Phase: Physics -> Sparse -> GAN) ..."
+        echo " [MetAI] Starting Training ..."
         echo "--------------------------------------------------------"
-
-        # 注意：已移除 --trainer.gradient_clip_val，因为代码中已实现手动裁剪
         
         python run/train_scwds_mamba.py fit \
             --seed_everything 42 \
@@ -42,13 +40,13 @@ case $MODE in
             --trainer.precision bf16-mixed \
             --trainer.max_epochs 100 \
             --trainer.log_every_n_steps 100 \
-            --trainer.accumulate_grad_batches 1 \
+            --trainer.accumulate_grad_batches 4 \
             --trainer.callbacks+=lightning.pytorch.callbacks.ModelCheckpoint \
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
             --trainer.callbacks.save_top_k -1 \
             --trainer.callbacks.save_last true \
-            --trainer.callbacks.filename "best-epoch={epoch:02d}-score={val_score:.4f}" \
+            --trainer.callbacks.filename "epoch={epoch:02d}-score={val_score:.4f}" \
             --trainer.callbacks+=lightning.pytorch.callbacks.EarlyStopping \
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \

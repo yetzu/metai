@@ -217,9 +217,9 @@ class MeteoMamba(nn.Module):
         
         # 2. CVAE 网络
         # Prior P(z|X): 推理时使用，仅依赖历史
-        self.prior_net = PosteriorNet(hid_S, in_seq_len, self.noise_dim)
+        self.prior_net = PosteriorNet(hid_S, latent_dim=self.noise_dim)
         # Posterior Q(z|X,Y): 训练时使用，依赖历史+未来
-        self.posterior_net = PosteriorNet(hid_S, in_seq_len + out_seq_len, self.noise_dim)
+        self.posterior_net = PosteriorNet(hid_S, latent_dim=self.noise_dim)
         
         # 3. 演变网络 (Mamba)
         self.evolution = EvolutionNet(
@@ -232,7 +232,7 @@ class MeteoMamba(nn.Module):
         # 4. 物理平流分支 (Advection)
         self.advection = AdvectiveProjection(hid_S, in_seq_len, out_seq_len)
         
-        # 5. 特征融合层 (Non-linear Fusion) [NEW]
+        # 5. 特征融合层 (Non-linear Fusion)
         # 输入: z_future_out (hid_S) + z_adv (hid_S) = 2 * hid_S
         # 输出: hid_S
         self.fusion_conv = nn.Sequential(
@@ -270,7 +270,9 @@ class MeteoMamba(nn.Module):
         # embed_hist: [B*T_in, hid_S, H', W']
         # skip: [B*T_in, hid_S, H, W]
         embed_hist, skip = self.enc(x_raw) 
-        _, C_hid, H_, W_ = embed_hist.shape[1:]
+        
+        # [Fix] 修正解包错误：embed_hist.shape[1:] 只有3个元素 (C, H, W)，只需3个变量
+        C_hid, H_, W_ = embed_hist.shape[1:]
         
         # 调整维度用于 3D 卷积处理: [B, C, T, H, W]
         embed_hist_seq = embed_hist.view(B, T_in, C_hid, H_, W_).permute(0, 2, 1, 3, 4)
@@ -316,11 +318,11 @@ class MeteoMamba(nn.Module):
         z_embed_in = embed_hist.view(B, T_in, C_hid, H_, W_)
         z_hist_out, z_future_out = self.evolution(z_embed_in, z)
         
-        # 4. 物理平流阶段
+        # 4. 物理平流分支 (Advection)
         # 基于历史最后一帧推演纯物理移动
         z_adv, flows = self.advection(z_hist_out)
         
-        # 5. 特征融合 (Deep Learning + Physics) [MODIFIED]
+        # 5. 特征融合 (Deep Learning + Physics)
         # 使用非线性卷积融合替代原有的 z_combined = z_future_out + z_adv
         
         # Reshape to [B*T_out, C, H, W] for 2D Conv
