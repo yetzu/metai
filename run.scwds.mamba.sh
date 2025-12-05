@@ -94,8 +94,8 @@ case $MODE in
             --save_dir "$SAVE_DIR" \
             --data_path "$DATA_PATH" \
             --in_shape 31 256 256 \
-            --obs_seq_len 10 \
-            --pred_seq_len 20 \
+            --in_seq_len 10 \
+            --out_seq_len 20 \
             --num_samples 10 \
             --accelerator cuda:0 
         ;;

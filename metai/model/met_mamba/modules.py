@@ -9,7 +9,7 @@ from timm.layers.weight_init import trunc_normal_
 from mamba_ssm import Mamba
 
 # ==========================================
-# 基础组件 (Basic Components)
+# 基础组件 (Basic Components) - 保持不变
 # ==========================================
 
 class RMSNorm(nn.Module):
@@ -101,20 +101,29 @@ class TimeAlignBlock(nn.Module):
         return x
 
 # ==========================================
-# 稀疏计算组件 (Structured Sparse Components)
+# 稀疏计算组件 (Structured Sparse Components) - [REFACTORED]
 # ==========================================
 
 class LearnableSparseHandler(nn.Module):
     """
-    [改进版: 可微稀疏处理器]
+    [改进版 v2.0] 鲁棒可微稀疏处理器
+    特性：
+    1. Mean+Max 双路特征融合：既保留背景动力学(Mean)，又捕捉强对流核心(Max)。
+    2. Additive STE：使用加法直通估计器，解决除法导致的数值不稳定和梯度爆炸问题。
     """
     def __init__(self, dim, sparse_ratio=0.5):
         super().__init__()
         self.sparse_ratio = sparse_ratio
         
-        # 路由网络
+        # [NEW] 路由特征预处理：融合 Mean 和 Max 特征
+        self.router_preprocess = nn.Sequential(
+            nn.Conv2d(dim * 2, dim // 2, kernel_size=1), 
+            nn.GroupNorm(4, dim // 2),
+            nn.LeakyReLU(inplace=True)
+        )
+        
         self.router = nn.Sequential(
-            nn.Conv2d(dim, dim // 4, kernel_size=3, padding=1),
+            nn.Conv2d(dim // 2, dim // 4, kernel_size=3, padding=1),
             nn.LeakyReLU(inplace=True),
             nn.Conv2d(dim // 4, 1, kernel_size=1)
         )
@@ -131,32 +140,47 @@ class LearnableSparseHandler(nn.Module):
         B, T, C, H, W = x.shape
         N_spatial = H * W
         
-        x_mean = x.mean(dim=1) 
-        scores_map = torch.sigmoid(self.router(x_mean)) 
+        # [STEP 1] 提取全局感知特征 (Mean + Max)
+        x_mean = x.mean(dim=1)  # [B, C, H, W]
+        x_max, _ = x.max(dim=1) # [B, C, H, W]
+        x_feat = torch.cat([x_mean, x_max], dim=1) # [B, 2C, H, W]
+        
+        # [STEP 2] 生成路由分数
+        x_feat = self.router_preprocess(x_feat)
+        scores_map = torch.sigmoid(self.router(x_feat)) # [B, 1, H, W]
         scores_flat = scores_map.view(B, N_spatial)
         
+        # 训练时注入噪声以增强鲁棒性 (可选)
         if self.training:
             noise = torch.randn_like(scores_flat) * self.noise_scale
             scores_flat_noisy = scores_flat + noise
         else:
             scores_flat_noisy = scores_flat
         
+        # [STEP 3] Top-K 选择
         keep_k = max(1, int(N_spatial * (1.0 - self.sparse_ratio)))
-        top_scores, top_indices = torch.topk(scores_flat_noisy, k=keep_k, dim=1)
+        # 使用 noisy score 进行排序选择
+        _, top_indices = torch.topk(scores_flat_noisy, k=keep_k, dim=1)
         top_indices, _ = torch.sort(top_indices, dim=1)
         
+        # [STEP 4] 特征收集
         x_flat = x.permute(0, 3, 4, 1, 2).reshape(B, N_spatial, T, C)
+        # 扩展索引维度以匹配 [B, K, T, C]
         idx_expanded = top_indices.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T, C)
         x_gathered = torch.gather(x_flat, 1, idx_expanded)
         
-        # STE Gradient Injection
-        score_gathered_clean = torch.gather(
+        # [STEP 5] 梯度注入 (Additive STE)
+        # 收集对应的 clean scores
+        score_gathered = torch.gather(
             scores_flat.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T, C), 
             1, idx_expanded
         )
-        eps = 1e-6
-        scale_factor = score_gathered_clean / (score_gathered_clean.detach() + eps)
-        x_sparse = x_gathered * scale_factor
+        
+        # 核心技巧：构造一个 Gate，数值为 1.0，但梯度来自 score
+        # Forward: x_sparse = x_gathered * 1.0
+        # Backward: grad 流向 x_gathered 和 score_gathered
+        gate = 1.0 + (score_gathered - score_gathered.detach())
+        x_sparse = x_gathered * gate
         
         return x_sparse, top_indices, (B, T, C, H, W)
 
@@ -200,14 +224,10 @@ class LocalityEnhancedMLP(nn.Module):
         return x
 
 # ==========================================
-# 增强型 Mamba 模块 (Enhanced Mamba Modules)
+# 增强型 Mamba 模块 (Enhanced Mamba Modules) - 保持不变
 # ==========================================
 
 class STMambaBlock(nn.Module):
-    """
-    [STMambaBlock v2.1 Fixed]
-    修复了 Warmup 阶段无法调用 MLP 的 Bug。
-    """
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, 
                  d_state=16, d_conv=4, expand=2, use_checkpoint=False, 
                  sparse_ratio=0.0, 
@@ -228,7 +248,6 @@ class STMambaBlock(nn.Module):
         self.norm2 = RMSNorm(dim)
         
         # --- 路径分支选择 ---
-        # 1. 如果启用了稀疏化，初始化稀疏组件
         if self.target_sparse_ratio > 0:
             self.sparse_handler = LearnableSparseHandler(dim, self.target_sparse_ratio)
             self.spatial_attn = nn.MultiheadAttention(
@@ -236,8 +255,6 @@ class STMambaBlock(nn.Module):
             )
             self.norm_attn = nn.LayerNorm(dim)
 
-        # 2. [关键修复] 只要 (不进行稀疏化) 或者 (有预热期)，就需要 MLP
-        # 如果 anneal_start_epoch > 0，前几个 epoch 会走稠密路径，必须要有 MLP
         if self.target_sparse_ratio <= 0 or self.anneal_start > 0:
             self.mlp = LocalityEnhancedMLP(dim, int(dim * mlp_ratio), dim, act_layer=act_layer, drop=drop)
             
@@ -265,7 +282,6 @@ class STMambaBlock(nn.Module):
         shortcut = x_in
         
         # === 分支 A: 稀疏路径 ===
-        # 只有当 curr_ratio > 0 且 组件存在时才走稀疏
         if curr_ratio > 0 and hasattr(self, 'sparse_handler'):
             original_ratio = self.sparse_handler.sparse_ratio
             self.sparse_handler.sparse_ratio = curr_ratio
@@ -303,13 +319,11 @@ class STMambaBlock(nn.Module):
             x_mamba = z_time.view(B, H, W, T, C).permute(0, 3, 4, 1, 2)
             x_mid = shortcut + self.drop_path(x_mamba)
             
-            # 必须确保 self.mlp 存在
             if hasattr(self, 'mlp'):
                 x_mid_flat = x_mid.permute(0, 1, 3, 4, 2).reshape(B, L, C)
                 x_mlp = self.mlp(self.norm2(x_mid_flat), H, W)
                 x_out = x_mid + self.drop_path(x_mlp.view(B, T, H, W, C).permute(0, 1, 4, 2, 3))
             else:
-                # 极端兜底：如果没有 MLP (理论上 init 修复后不会发生)，直接返回 Mamba 结果
                 x_out = x_mid
 
         return x_out
@@ -349,7 +363,12 @@ class AdvectiveProjection(nn.Module):
         self.init_h = nn.Conv2d(dim, dim, 1)
 
     def forward(self, z_seq):
+        """
+        [REFACTORED]
+        输入现在是一个序列 z_seq，我们取其最后一帧作为平流的起点。
+        """
         B, T_in, C, H, W = z_seq.shape
+        # 取最后一帧作为当前状态
         curr_z = z_seq[:, -1]
         h = self.init_h(curr_z)
         
@@ -371,6 +390,7 @@ class AdvectiveProjection(nn.Module):
             z_advected = F.grid_sample(
                 curr_z, grid, mode='bilinear', padding_mode='reflection', align_corners=False
             )
+            # Advection + 自身的微小残差 (主要负责位移)
             next_z = z_advected + residual
             curr_z = next_z
             preds.append(curr_z)

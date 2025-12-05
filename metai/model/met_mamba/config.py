@@ -14,8 +14,8 @@ class ModelConfig(BaseModel):
     
     # 2. 数据参数
     in_shape: Tuple[int, int, int] = (31, 256, 256)
-    obs_seq_len: int = 10
-    pred_seq_len: int = 20
+    in_seq_len: int = 10
+    out_seq_len: int = 20
     out_channels: int = 1
     
     # 3. 架构参数

@@ -17,82 +17,45 @@ from .modules import (
 # ==============================================================================
 
 def sampling_generator(N, reverse=False):
-    """
-    生成下采样/上采样控制序列。
-    例如 N=4 -> [False, True, False, True]
-    用于控制 Encoder/Decoder 中哪些层执行分辨率变化。
-    """
     samplings = [False, True] * (N // 2)
     if reverse: return list(reversed(samplings[:N]))
     else: return samplings[:N]
 
 # ==============================================================================
-# 编码器与解码器 (Encoder & Decoder)
+# 编码器与解码器 (Encoder & Decoder) - 保持不变
 # ==============================================================================
 
 class Encoder(nn.Module):
-    """
-    [空间编码器]
-    负责将输入的时空序列数据逐帧编码为潜在特征。
-    
-    Structure:
-        Stem -> Stacked ConvSC Blocks (Downsampling)
-    """
     def __init__(self, C_in, C_hid, N_S, spatio_kernel):
         super().__init__()
-        # Stem 层：初步特征提取，扩展通道数
         self.stem = nn.Sequential(
             nn.Conv2d(C_in, C_hid, kernel_size=3, stride=1, padding=1, bias=False),
             nn.GroupNorm(2, C_hid),
             nn.SiLU(inplace=True)
         )
-        # 生成采样配置
         samplings = sampling_generator(N_S)
-        # 堆叠 ConvSC 模块
         self.enc = nn.Sequential(
             ConvSC(C_hid, C_hid, spatio_kernel, downsampling=samplings[0]),
             *[ConvSC(C_hid, C_hid, spatio_kernel, downsampling=s) for s in samplings[1:]]
         )
 
     def forward(self, x):
-        """
-        Args:
-            x: [B, T, C, H, W]
-        Returns:
-            latent: [B*T, C_hid, H', W'] 最终编码特征
-            enc1:   [B*T, C_hid, H, W]   浅层特征 (用于 Skip Connection)
-        """
         B, T, C, H, W = x.shape
-        # 将时间维度合并到 Batch 维度，独立处理每一帧的空间特征
         x = x.view(B * T, C, H, W)
         x = self.stem(x) 
-        
-        # 获取第一层的输出用于跳跃连接
         enc1 = self.enc[0](x)
         latent = enc1
-        
-        # 逐层前向传播
         for i in range(1, len(self.enc)):
             latent = self.enc[i](latent)
-            
         return latent, enc1
 
 
 class Decoder(nn.Module):
-    """
-    [空间解码器]
-    负责将潜在特征恢复到原始空间分辨率。
-    
-    Structure:
-        Stacked ConvSC/ResizeConv Blocks (Upsampling) -> Readout
-    """
     def __init__(self, C_hid, C_out, N_S, spatio_kernel):
         super().__init__()
-        # 生成反向的采样配置
         samplings = sampling_generator(N_S, reverse=True)
         layers = []
         for i, s in enumerate(samplings):
-            # 策略：最后两层使用 ResizeConv 替代转置卷积，减少棋盘格伪影
             if i < len(samplings) - 2:
                 layers.append(ConvSC(C_hid, C_hid, spatio_kernel, upsampling=s))
             else:
@@ -105,50 +68,34 @@ class Decoder(nn.Module):
         self.readout = nn.Conv2d(C_hid, C_out, 1)
 
     def forward(self, hid, skip=None):
-        """
-        Args:
-            hid:  [B*T, C_hid, H', W'] 演变后的特征
-            skip: [B*T, C_hid, H, W]   跳跃连接特征
-        """
-        # 前向传播直到最后一层之前
         for i in range(0, len(self.dec)-1):
             hid = self.dec[i](hid)
-        
-        # 融合跳跃连接特征
         if skip is not None:
             hid = hid + skip
-            
-        # 最后一层处理
         Y = self.dec[-1](hid)
         return self.readout(Y)
 
 # ==============================================================================
-# 演变网络 (Evolution Network)
+# 演变网络 (EvolutionNet) - [REFACTORED]
 # ==============================================================================
 
 class EvolutionNet(nn.Module):
     """
-    [演变网络] 核心模块
-    
-    功能：
-        利用 STMambaBlock 建模时空序列的演变规律。
-        
+    [改进版 v2.0] 全序列自回归演变网络
     特性：
-        1. 噪声注入 (Noise Injection): 将随机噪声注入特征，增强生成多样性。
-        2. 零初始化 (Zero Init): 噪声层初始化为 0，确保训练初期稳定性。
-        3. 稀疏 Mamba (Sparse STMamba): 随着训练进行逐步引入稀疏计算。
+    1. 引入 future_tokens，将序列扩展为 T_in + T_out。
+    2. Mamba 负责在隐空间内进行全序列的非线性生消演变。
     """
     def __init__(self, dim_in, dim_hid, num_layers, drop=0., drop_path=0., 
                  mamba_kwargs={}, use_checkpoint=True, max_t=64, input_resolution=(64, 64),
                  sparse_ratio=0.0,
-                 anneal_start_epoch=5, anneal_end_epoch=10):
+                 anneal_start_epoch=5, anneal_end_epoch=10,
+                 out_seq_len=20): # [NEW] 增加输出序列长度参数
         super().__init__()
         
         # 1. 噪声投影层
         self.noise_dim = 32
         self.noise_proj = nn.Linear(self.noise_dim, dim_hid) 
-        
-        # [Critical Init] 初始化为 0，防止初期噪声干扰收敛
         nn.init.zeros_(self.noise_proj.weight)
         nn.init.zeros_(self.noise_proj.bias)
         
@@ -156,7 +103,14 @@ class EvolutionNet(nn.Module):
         self.proj_in = nn.Linear(dim_in, dim_hid)
         self.proj_out = nn.Linear(dim_hid, dim_in)
         
-        # 3. 位置编码 (Time & Space PE)
+        # [NEW] 3. 未来查询向量 (Learnable Query Tokens)
+        # 用于填补未来 T_out 的空缺，作为 Mamba 预测未来的载体
+        self.future_tokens = nn.Parameter(torch.zeros(1, out_seq_len, dim_hid, 1, 1))
+        trunc_normal_(self.future_tokens, std=0.02)
+        
+        # 4. 位置编码 (Time & Space PE)
+        # 扩大 max_t 以支持更长的预测序列
+        max_t = max(max_t, 32 + out_seq_len) 
         self.pos_embed_t = nn.Parameter(torch.zeros(1, max_t, dim_hid, 1, 1)) 
         H_feat, W_feat = input_resolution
         self.pos_embed_s = nn.Parameter(torch.zeros(1, 1, dim_hid, H_feat, W_feat)) 
@@ -166,7 +120,7 @@ class EvolutionNet(nn.Module):
         trunc_normal_(self.pos_embed_s, std=0.02)
         trunc_normal_(self.time_prompt, std=0.02)
         
-        # 4. 堆叠 STMamba Block
+        # 5. 堆叠 STMamba Block
         dpr = [x.item() for x in torch.linspace(1e-2, drop_path, num_layers)]
         self.layers = nn.ModuleList([
             STMambaBlock(
@@ -184,19 +138,19 @@ class EvolutionNet(nn.Module):
     def forward(self, x, current_epoch=0):
         """
         Args:
-            x: [B, T, C, H, W] 输入特征
-            current_epoch: 当前训练轮次 (用于稀疏度退火)
+            x: [B, T_in, C, H, W] 历史特征
+        Returns:
+            z_history: [B, T_in, C, H, W] 演变后的历史特征
+            z_future:  [B, T_out, C, H, W] 演变出的未来特征
         """
-        B, T, C, H, W = x.shape
+        B, T_in, C, H, W = x.shape
+        T_out = self.future_tokens.shape[1]
         
-        # 1. 噪声生成与注入
+        # 1. 噪声生成 (仅注入历史部分，或者也可以注入未来，这里保持原逻辑注入输入)
         if self.training:
-            noise = torch.randn(B, T, self.noise_dim, device=x.device)
+            noise = torch.randn(B, T_in, self.noise_dim, device=x.device)
         else:
-            # 推理时默认使用零噪声 (Mean Prediction)
-            noise = torch.zeros(B, T, self.noise_dim, device=x.device)
-            
-        # [B, T, 32] -> [B, T, C_hid] -> [B, T, C_hid, 1, 1]
+            noise = torch.zeros(B, T_in, self.noise_dim, device=x.device)
         noise_emb = self.noise_proj(noise).unsqueeze(3).unsqueeze(3)
         
         # 2. 特征投影
@@ -204,23 +158,29 @@ class EvolutionNet(nn.Module):
         x = self.proj_in(x)
         x = x.permute(0, 1, 4, 2, 3).contiguous() # [B, T, C_hid, H, W]
         
-        # 3. 融合噪声 (加法融合)
+        # 3. 融合噪声
         x = x + noise_emb
         
-        # 4. 位置编码插值与叠加
-        # Time PE
-        if T <= self.time_prompt.shape[1]:
-            t_prompt = self.time_prompt[:, :T, ...]
-            t_pos = self.pos_embed_t[:, :T, ...]
+        # [NEW] 4. 序列拼接 (Concatenate History + Future Query)
+        # 扩展 future_tokens 到当前 Batch
+        future_queries = self.future_tokens.expand(B, -1, -1, H, W)
+        x_seq = torch.cat([x, future_queries], dim=1) # [B, T_total, C_hid, H, W]
+        
+        T_total = x_seq.shape[1]
+        
+        # 5. 位置编码插值与叠加
+        # Time PE (适配 T_total)
+        if T_total <= self.time_prompt.shape[1]:
+            t_prompt = self.time_prompt[:, :T_total, ...]
+            t_pos = self.pos_embed_t[:, :T_total, ...]
         else:
-            # 线性插值适应更长序列
             t_prompt = F.interpolate(
                 self.time_prompt.squeeze(-1).squeeze(-1).permute(0,2,1), 
-                size=T, mode='linear'
+                size=T_total, mode='linear'
             ).permute(0,2,1).unsqueeze(-1).unsqueeze(-1)
             t_pos = F.interpolate(
                 self.pos_embed_t.squeeze(-1).squeeze(-1).permute(0,2,1), 
-                size=T, mode='linear'
+                size=T_total, mode='linear'
             ).permute(0,2,1).unsqueeze(-1).unsqueeze(-1)
 
         # Spatial PE
@@ -231,56 +191,43 @@ class EvolutionNet(nn.Module):
         else:
             s_pos = self.pos_embed_s
 
-        x = x + t_prompt + t_pos + s_pos
+        x_seq = x_seq + t_prompt + t_pos + s_pos
         
-        # 5. 通过 STMamba 层
+        # 6. 通过 STMamba 层 (一次性处理历史+未来)
         for layer in self.layers:
-            x = layer(x, current_epoch=current_epoch)
+            x_seq = layer(x_seq, current_epoch=current_epoch)
             
-        # 6. 输出投影
-        x = x.permute(0, 1, 3, 4, 2).contiguous()
-        x = self.proj_out(x)
-        x = x.permute(0, 1, 4, 2, 3).contiguous()
+        # 7. 输出投影
+        x_seq = x_seq.permute(0, 1, 3, 4, 2).contiguous()
+        x_seq = self.proj_out(x_seq)
+        x_seq = x_seq.permute(0, 1, 4, 2, 3).contiguous()
         
-        return x
+        # 8. 分离历史与未来
+        z_history = x_seq[:, :T_in]
+        z_future = x_seq[:, T_in:] 
+        
+        return z_history, z_future
 
 # ==============================================================================
-# 主模型 (Main Model Class)
+# 主模型 (Main Model Class) - [REFACTORED]
 # ==============================================================================
 
 class MeteoMamba(nn.Module):
     """
-    [MeteoMamba v3.0] No-GAN Version
-    
-    架构:
-        1. Encoder: 提取空间特征
-        2. EvolutionNet: 时空演变 + 随机噪声注入
-        3. Advection: 显式物理平流投影 (Physics-Guided Projection)
-        4. Decoder: 特征恢复与上采样
-        
-    特点:
-        - 纯监督学习 (Rule-Based Loss 驱动)
-        - 包含物理约束模块 (AdvectiveProjection)
-        - 支持稀疏计算退火
+    [MeteoMamba v2.0 Final] 
+    1. Encoder: 提取空间特征
+    2. EvolutionNet: Autoregressive Mamba (全序列推演)
+    3. Advection: 物理约束 (作为 Residual 分支)
+    4. Decoder: 特征恢复
     """
     def __init__(self, 
-                 in_shape,      # (C, H, W)
-                 in_seq_len,    # T_in
-                 out_seq_len,   # T_out
-                 out_channels=1,
-                 hid_S=64,      # 空间隐藏层维度
-                 hid_T=256,     # 时间隐藏层维度
-                 N_S=4,         # 空间层数
-                 N_T=8,         # 时间层数
-                 spatio_kernel_enc=3, 
-                 spatio_kernel_dec=3, 
-                 mamba_d_state=16, 
-                 mamba_d_conv=4, 
-                 mamba_expand=2,
+                 in_shape, in_seq_len, out_seq_len, out_channels=1,
+                 hid_S=64, hid_T=256, N_S=4, N_T=8,
+                 spatio_kernel_enc=3, spatio_kernel_dec=3, 
+                 mamba_d_state=16, mamba_d_conv=4, mamba_expand=2,
                  use_checkpoint=True,
                  mamba_sparse_ratio=0.5, 
-                 anneal_start_epoch=5,
-                 anneal_end_epoch=10,
+                 anneal_start_epoch=5, anneal_end_epoch=10,
                  **kwargs):
         super().__init__()
         
@@ -298,11 +245,10 @@ class MeteoMamba(nn.Module):
         # 1. 初始化编码器
         self.enc = Encoder(C, hid_S, N_S, spatio_kernel_enc)
         
-        # 计算演变阶段的空间分辨率
         ds_factor = 2 ** (N_S // 2) 
         evo_res = (H // ds_factor, W // ds_factor)
 
-        # 2. 初始化演变网络
+        # 2. 初始化演变网络 (传入 out_seq_len)
         self.evolution = EvolutionNet(
             hid_S, hid_T, N_T, 
             drop=0.0, drop_path=0.1, 
@@ -311,7 +257,8 @@ class MeteoMamba(nn.Module):
             input_resolution=evo_res,
             sparse_ratio=mamba_sparse_ratio,
             anneal_start_epoch=anneal_start_epoch, 
-            anneal_end_epoch=anneal_end_epoch      
+            anneal_end_epoch=anneal_end_epoch,
+            out_seq_len=out_seq_len  # [NEW]
         )
         
         # 3. 显式平流时间投影层 (物理约束)
@@ -324,49 +271,47 @@ class MeteoMamba(nn.Module):
         # 4. 初始化解码器
         self.dec = Decoder(hid_S, self.out_channels, N_S, spatio_kernel_dec)
         
-        # 5. 跳跃连接投影层 (用于连接 Encoder 第一层与 Decoder 倒数第二层)
+        # 5. 跳跃连接投影层
         self.skip_proj = TimeAlignBlock(T_in, self.T_out, hid_S)
 
     def forward(self, x_raw, current_epoch=0):
         """
-        Args:
-            x_raw: [B, T_in, C_in, H, W] 原始输入序列
-            current_epoch: 当前 Epoch
-            
         Returns:
-            Y: [B, T_out, C_out, H, W] 预测结果
-            flows: [B, T_out, 2, H, W] 潜在流场
+            Y: [B, T_out, C_out, H, W]
+            flows: [B, T_out, 2, H, W]
         """
         B, T_in, C_in, H, W = x_raw.shape
         
-        # 1. 编码阶段 (Encoder)
-        # embed: [B*T_in, C_hid, H', W'], skip: [B*T_in, C_hid, H, W]
+        # 1. 编码阶段
         embed, skip = self.enc(x_raw) 
         _, C_hid, H_, W_ = embed.shape 
         
-        # 2. 演变阶段 (Evolution)
+        # 2. 演变阶段 (Mamba Autoregressive)
+        # z_hist: 历史特征演变, z_future_mamba: Mamba预测的未来特征(含生消)
         z = embed.view(B, T_in, C_hid, H_, W_)
-        z = self.evolution(z, current_epoch=current_epoch)
+        z_hist, z_future_mamba = self.evolution(z, current_epoch=current_epoch)
         
-        # 3. 时间投影阶段 (Time Projection via Advection)
-        # z: [B, T_out, C_hid, H', W'], flows: [B, T_out, 2, H', W']
-        z, flows = self.latent_time_proj(z) 
+        # 3. 物理平流阶段 (Advection Constraint)
+        # 基于历史最后一帧 z_hist[:, -1] 递归推导纯平流预测 z_adv
+        z_adv, flows = self.latent_time_proj(z_hist) 
         
-        # 重塑为 Decoder 需要的格式
-        z = z.view(B * self.T_out, C_hid, H_, W_)
+        # 4. 物理-深度残差融合 (Physics-Residual Fusion)
+        # 最终特征 = Mamba预测(非线性变化) + Advection预测(平流惯性)
+        z_combined = z_future_mamba + z_adv
         
-        # 4. 处理跳跃连接 (Skip Connection)
-        # 调整 skip 特征的时间维度以匹配输出序列长度
+        # 5. 解码准备
+        z_combined = z_combined.view(B * self.T_out, C_hid, H_, W_)
+        
+        # 6. 处理跳跃连接
         skip = skip.view(B, T_in, C_hid, H, W)
         skip_out = self.skip_proj(skip) 
         skip_out = skip_out.view(B * self.T_out, C_hid, H, W)
         
-        # 5. 解码阶段 (Decoder)
-        Y_diff = self.dec(z, skip_out)
+        # 7. 解码阶段
+        Y_diff = self.dec(z_combined, skip_out)
         Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         
-        # 6. 残差连接 (Residual Connection)
-        # 预测的是相对于最后一帧的变化量
+        # 8. 残差连接 (预测增量)
         last_frame = x_raw[:, -1:, :self.out_channels, :, :].detach() 
         Y = last_frame + Y_diff
         
