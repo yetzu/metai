@@ -54,7 +54,7 @@ class ModelConfig(BaseModel):
     
     # KL 退火策略 (防止 Posterior Collapse)
     kl_weight_max: float = 0.01  # KL Loss 的最大权重
-    kl_anneal_epochs: int = 10   # 在前 N 个 epoch 内线性增加 KL 权重
+    kl_anneal_epochs: int = 25   # 在前 N 个 epoch 内线性增加 KL 权重
     
     # 7. 其它
     use_temporal_weight: bool = True # 是否在 Loss 中对时间步加权

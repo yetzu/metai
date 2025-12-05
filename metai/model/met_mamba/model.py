@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from timm.layers.weight_init import trunc_normal_
 
-# 引用基础组件 (假设 modules.py 已包含这些类)
+# 引用基础组件
 from .modules import (
     ConvSC, 
     ResizeConv, 
@@ -188,6 +188,7 @@ class MeteoMamba(nn.Module):
     1. CVAE: 提供概率生成能力，防止 0 值坍塌 (Zero Collapse)。
     2. Advection: 物理平流提供保底预测，防止第二帧迅速衰减。
     3. Mamba: 线性复杂度捕捉长程时空依赖。
+    4. Fusion: 非线性融合层动态结合深度学习预测与物理平流预测。
     """
     def __init__(self, 
                  in_shape, in_seq_len, out_seq_len, out_channels=1,
@@ -231,7 +232,16 @@ class MeteoMamba(nn.Module):
         # 4. 物理平流分支 (Advection)
         self.advection = AdvectiveProjection(hid_S, in_seq_len, out_seq_len)
         
-        # 5. 解码器与跳跃连接
+        # 5. 特征融合层 (Non-linear Fusion) [NEW]
+        # 输入: z_future_out (hid_S) + z_adv (hid_S) = 2 * hid_S
+        # 输出: hid_S
+        self.fusion_conv = nn.Sequential(
+            nn.Conv2d(hid_S * 2, hid_S, kernel_size=1),
+            nn.GroupNorm(8, hid_S),
+            nn.SiLU(inplace=True)
+        )
+        
+        # 6. 解码器与跳跃连接
         self.dec = Decoder(hid_S, out_channels, N_S, spatio_kernel_dec)
         self.skip_proj = TimeAlignBlock(in_seq_len, out_seq_len, hid_S)
 
@@ -310,16 +320,25 @@ class MeteoMamba(nn.Module):
         # 基于历史最后一帧推演纯物理移动
         z_adv, flows = self.advection(z_hist_out)
         
-        # 5. 特征融合 (Deep Learning + Physics)
-        z_combined = z_future_out + z_adv
+        # 5. 特征融合 (Deep Learning + Physics) [MODIFIED]
+        # 使用非线性卷积融合替代原有的 z_combined = z_future_out + z_adv
+        
+        # Reshape to [B*T_out, C, H, W] for 2D Conv
+        z_future_flat = z_future_out.reshape(B * self.T_out, C_hid, H_, W_)
+        z_adv_flat = z_adv.reshape(B * self.T_out, C_hid, H_, W_)
+        
+        # Concat along channel
+        z_cat = torch.cat([z_future_flat, z_adv_flat], dim=1) # -> [B*T, 2*C, H, W]
+        
+        # Apply fusion
+        z_combined_flat = self.fusion_conv(z_cat) # -> [B*T, C, H, W]
         
         # 6. 解码阶段
-        z_combined_flat = z_combined.reshape(B * self.T_out, C_hid, H_, W_)
-        
         # Skip Connection 时间投影
         skip = skip.view(B, T_in, C_hid, H, W)
         skip_out = self.skip_proj(skip).view(B * self.T_out, C_hid, H, W)
         
+        # 解码
         Y_diff = self.dec(z_combined_flat, skip_out)
         Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         

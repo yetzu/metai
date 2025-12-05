@@ -22,16 +22,24 @@ class WeightedL1Loss(nn.Module):
         super().__init__()
         self.base_weight = base_weight
         self.scale_weight = scale_weight
-
+    
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         diff = torch.abs(pred - target)
-        # 动态权重：Target 越大，权重呈指数级增长，迫使模型关注强降水
+        # 动态权重：Target 越大，权重呈指数级增长
         weights = self.base_weight + self.scale_weight * (target ** 2)
         loss_map = diff * weights
         
         if mask is not None:
             loss_map = loss_map * mask
-            return loss_map.sum() / (mask.sum() + 1e-8)
+            
+            # [修改部分开始] --------------------------------------------
+            denom = mask.sum()
+            # 如果有效像素点过少（<1.0），直接返回 0 梯度，避免除以极小值导致 NaN
+            if denom < 1.0:
+                return torch.tensor(0.0, requires_grad=True, device=pred.device)
+            
+            return loss_map.sum() / denom
+            # [修改部分结束] --------------------------------------------
         
         return loss_map.mean()
 
