@@ -53,11 +53,13 @@ case $MODE in
             --trainer.callbacks.monitor "val_score" \
             --trainer.callbacks.mode "max" \
             --trainer.callbacks.patience 20 \
+            --trainer.gradient_clip_val 0.5 \
+            --trainer.gradient_clip_algorithm "norm" \
             --model.in_shape "[31, 256, 256]" \
             --model.in_seq_len 10 \
             --model.out_seq_len 20 \
-            --model.hid_S 64 \
-            --model.hid_T 256 \
+            --model.hid_S 128 \
+            --model.hid_T 512 \
             --model.N_S 4 \
             --model.N_T 8 \
             --model.mamba_d_state 32 \
@@ -67,7 +69,7 @@ case $MODE in
             --model.anneal_start_epoch 5 \
             --model.anneal_end_epoch 15 \
             --model.mamba_sparse_ratio 0.5 \
-            --model.lr 1e-3 \
+            --model.lr 8e-4 \
             --model.use_temporal_weight true \
             --data.data_path $DATA_PATH \
             --data.batch_size $BATCH_SIZE \
