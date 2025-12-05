@@ -5,7 +5,8 @@ from typing import Tuple
 
 class ModelConfig(BaseModel):
     """
-    MeteoMamba 模型配置类 (No-GAN Version)
+    MeteoMamba V3 模型配置类
+    包含架构参数、优化器参数及 CVAE 训练策略参数
     """
     
     # 1. 基础环境
@@ -18,47 +19,45 @@ class ModelConfig(BaseModel):
     out_seq_len: int = 20
     out_channels: int = 1
     
-    # 3. 架构参数
-    hid_S: int = 128
-    hid_T: int = 512
+    # 3. 架构参数 (Architecture)
+    hid_S: int = 64
+    hid_T: int = 256
     N_S: int = 4
     N_T: int = 8
     
-    mamba_d_state: int = 32
+    mamba_d_state: int = 16
     mamba_d_conv: int = 4
     mamba_expand: int = 2
     use_checkpoint: bool = True
     
-    mamba_sparse_ratio: float = 0.5
-    anneal_start_epoch: int = 5
-    anneal_end_epoch: int = 15
+    # 4. CVAE 生成参数
+    noise_dim: int = 32  # 隐变量 z 的维度
     
-    # 4. 噪声配置 (保留，用于EvolutionNet随机性)
-    noise_dim: int = 32
-    
-    # 5. 训练参数
+    # 5. 训练参数 (Training)
     batch_size: int = 4
     accumulate_grad_batches: int = 1
-    max_epochs: int = 100
+    max_epochs: int = 50
     
     opt: str = "adamw"
     lr: float = 1e-3
     min_lr: float = 1e-5
     warmup_lr: float = 1e-5
     warmup_epoch: int = 5
-    weight_decay: float = 0.05
-    momentum: float = 0.9
-    filter_bias_and_bn: bool = True
+    weight_decay: float = 0.01
     
     sched: str = "cosine"
-    decay_epoch: int = 30
-    decay_rate: float = 0.1
     
-    # 6. 策略配置
-    use_curriculum_learning: bool = True 
-    blur_sigma_max: float = 2.0 
-    blur_epochs: int = 20 
-    use_temporal_weight: bool = True
+    # 6. 损失与策略参数 (Loss & Strategy) - [修改]
+    weight_mae: float = 10.0
+    weight_csi: float = 1.0
+    weight_corr: float = 1.0
+    
+    # KL 退火策略 (防止 Posterior Collapse)
+    kl_weight_max: float = 0.01  # KL Loss 的最大权重
+    kl_anneal_epochs: int = 10   # 在前 N 个 epoch 内线性增加 KL 权重
+    
+    # 7. 其它
+    use_temporal_weight: bool = True # 是否在 Loss 中对时间步加权
     
     model_config = ConfigDict(protected_namespaces=())
     

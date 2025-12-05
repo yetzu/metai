@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from timm.layers.weight_init import trunc_normal_
 
+# 引用基础组件 (假设 modules.py 已包含这些类)
 from .modules import (
     ConvSC, 
     ResizeConv, 
@@ -14,13 +15,13 @@ from .modules import (
 )
 
 # ==============================================================================
-# 编码器与解码器
+# 编码器 (Encoder)
 # ==============================================================================
 
 class Encoder(nn.Module):
     """
-    空间编码器：将高分辨率观测数据压缩为低维隐特征。
-    结构：Stem -> 多层下采样 ConvSC
+    空间编码器：将高分辨率雷达观测序列压缩为低维隐特征。
+    结构：Stem 卷积 -> 多层下采样卷积块 (ConvSC)
     """
     def __init__(self, C_in, C_hid, N_S, spatio_kernel):
         super().__init__()
@@ -30,11 +31,12 @@ class Encoder(nn.Module):
             nn.SiLU(inplace=True)
         )
         
-        # 生成下采样控制序列 (True/False)
+        # 生成下采样控制序列 (例如: [False, True, False, True])
+        # N_S 控制编码器的深度
         samplings = [False, True] * (N_S // 2)
         
         layers = []
-        # 第一层可能涉及下采样
+        # 第一层
         layers.append(ConvSC(C_hid, C_hid, spatio_kernel, downsampling=samplings[0]))
         # 后续层
         for s in samplings[1:]:
@@ -43,27 +45,37 @@ class Encoder(nn.Module):
         self.enc = nn.Sequential(*layers)
 
     def forward(self, x):
-        # Input: [B, T, C, H, W]
+        """
+        Args:
+            x: [B, T, C, H, W] 输入序列
+        Returns:
+            latent: [B*T, C_hid, H', W'] 深层特征
+            enc1: [B*T, C_hid, H, W] 浅层特征 (用于 Skip Connection)
+        """
         B, T, C, H, W = x.shape
         x = x.view(B * T, C, H, W)
         
         x = self.stem(x) 
-        enc1 = self.enc[0](x) # 保留浅层特征用于 Skip Connection
+        enc1 = self.enc[0](x) # 保留浅层特征
         
         latent = enc1
         for i in range(1, len(self.enc)):
             latent = self.enc[i](latent)
             
-        return latent, enc1 # latent: [B*T, C_hid, H', W']
+        return latent, enc1
+
+# ==============================================================================
+# 解码器 (Decoder)
+# ==============================================================================
 
 class Decoder(nn.Module):
     """
     空间解码器：将演变后的隐特征恢复为预测图。
-    结构：多层上采样 ConvSC -> Readout
+    结构：多层上采样卷积块 -> 输出投影
     """
     def __init__(self, C_hid, C_out, N_S, spatio_kernel):
         super().__init__()
-        # 生成上采样控制序列 (反向)
+        # 生成上采样控制序列 (与 Encoder 相反)
         samplings = list(reversed([False, True] * (N_S // 2)))
         
         layers = []
@@ -71,23 +83,32 @@ class Decoder(nn.Module):
             if i < len(samplings) - 2:
                 layers.append(ConvSC(C_hid, C_hid, spatio_kernel, upsampling=s))
             else:
-                # 倒数第二层处理
-                if s: layers.append(ResizeConv(C_hid, C_hid, spatio_kernel))
-                else: layers.append(ConvSC(C_hid, C_hid, spatio_kernel, upsampling=False))
+                # 倒数第二层特殊处理 (ResizeConv 或 ConvSC)
+                if s: 
+                    layers.append(ResizeConv(C_hid, C_hid, spatio_kernel))
+                else: 
+                    layers.append(ConvSC(C_hid, C_hid, spatio_kernel, upsampling=False))
                     
         self.dec = nn.Sequential(*layers)
         self.readout = nn.Conv2d(C_hid, C_out, 1)
 
     def forward(self, hid, skip=None):
-        # 解码主体
+        """
+        Args:
+            hid: [B*T, C_hid, H', W'] 隐特征
+            skip: [B*T, C_hid, H, W] 跳跃连接特征 (可选)
+        Returns:
+            Y: [B*T, C_out, H, W] 重建结果
+        """
+        # 解码主体 (除最后一层)
         for i in range(0, len(self.dec)-1):
             hid = self.dec[i](hid)
             
-        # 跳跃连接融合 (最后几层前)
+        # 融合 Skip Connection
         if skip is not None:
             hid = hid + skip
             
-        # 最后一层与输出投影
+        # 最后一层解码 + Readout
         Y = self.dec[-1](hid)
         return self.readout(Y)
 
@@ -98,7 +119,7 @@ class Decoder(nn.Module):
 class EvolutionNet(nn.Module):
     """
     时空演变网络核心。
-    功能：结合 CVAE 隐变量 z，利用 STMamba 推演未来特征。
+    功能：结合 CVAE 隐变量 z，利用 STMamba 在隐空间推演未来特征。
     """
     def __init__(self, dim, num_layers, out_seq_len, noise_dim=32, drop_path=0.1, **kwargs):
         super().__init__()
@@ -107,15 +128,16 @@ class EvolutionNet(nn.Module):
         # 1. 噪声投影层：将隐变量 z 映射到特征维度
         self.z_proj = nn.Linear(noise_dim, dim)
         
-        # 2. 未来查询向量 (Learned Queries)：承载未来预测的容器
+        # 2. 未来查询向量 (Learned Queries)：承载未来预测状态的容器
+        # 相比简单的零填充，可学习的 Query 能捕捉平均气候态
         self.future_tokens = nn.Parameter(torch.zeros(1, out_seq_len, dim, 1, 1))
         trunc_normal_(self.future_tokens, std=0.02)
         
-        # 3. 时间位置编码
+        # 3. 可学习的时间位置编码
         self.pos_embed_t = nn.Parameter(torch.zeros(1, 64, dim, 1, 1)) 
         trunc_normal_(self.pos_embed_t, std=0.02)
         
-        # 4. 堆叠 STMamba Block
+        # 4. 堆叠 STMamba Block (Bi-2D-Mamba + Soft-Gating)
         dpr = [x.item() for x in torch.linspace(1e-2, drop_path, num_layers)]
         self.layers = nn.ModuleList([
             STMambaBlock(dim, drop_path=dpr[i], **kwargs) for i in range(num_layers)
@@ -132,8 +154,8 @@ class EvolutionNet(nn.Module):
         B, T_in, C, H, W = x_hist.shape
         T_out = self.future_tokens.shape[1]
         
-        # 1. 注入噪声 (Conditioning)
-        # z 广播到全图，代表全局环境不确定性
+        # 1. 注入噪声 (Conditioning on z)
+        # z 被广播到全时空，代表本次预测的全局随机扰动 (Global Stochasticity)
         z_emb = self.z_proj(z_sample).view(B, 1, C, 1, 1)
         
         x_hist = x_hist + z_emb
@@ -143,14 +165,15 @@ class EvolutionNet(nn.Module):
         x_seq = torch.cat([x_hist, x_future], dim=1) # [B, T_total, C, H, W]
         T_total = x_seq.shape[1]
         
-        # 3. 叠加位置编码
+        # 3. 叠加位置编码 (广播到 Spatial 维度)
         if T_total <= self.pos_embed_t.shape[1]:
             x_seq = x_seq + self.pos_embed_t[:, :T_total]
         
-        # 4. Mamba 深度演变
+        # 4. Mamba 深度演变 (In-context Learning)
         for layer in self.layers:
             x_seq = layer(x_seq)
             
+        # 分离历史与未来部分
         return x_seq[:, :T_in], x_seq[:, T_in:]
 
 # ==============================================================================
@@ -159,8 +182,12 @@ class EvolutionNet(nn.Module):
 
 class MeteoMamba(nn.Module):
     """
-    MeteoMamba V3 主模型架构。
-    集成：Encoder -> CVAE -> Evolution(Mamba) + Advection -> Fusion -> Decoder
+    MeteoMamba 主模型架构。
+    
+    设计理念：
+    1. CVAE: 提供概率生成能力，防止 0 值坍塌 (Zero Collapse)。
+    2. Advection: 物理平流提供保底预测，防止第二帧迅速衰减。
+    3. Mamba: 线性复杂度捕捉长程时空依赖。
     """
     def __init__(self, 
                  in_shape, in_seq_len, out_seq_len, out_channels=1,
@@ -188,12 +215,12 @@ class MeteoMamba(nn.Module):
         self.enc = Encoder(C, hid_S, N_S, spatio_kernel_enc)
         
         # 2. CVAE 网络
-        # Prior P(z|X): 仅从历史预测 z (推理时使用)
+        # Prior P(z|X): 推理时使用，仅依赖历史
         self.prior_net = PosteriorNet(hid_S, in_seq_len, self.noise_dim)
-        # Posterior Q(z|X,Y): 从历史+未来预测 z (训练时使用)
+        # Posterior Q(z|X,Y): 训练时使用，依赖历史+未来
         self.posterior_net = PosteriorNet(hid_S, in_seq_len + out_seq_len, self.noise_dim)
         
-        # 3. 演变网络
+        # 3. 演变网络 (Mamba)
         self.evolution = EvolutionNet(
             hid_S, N_T, 
             noise_dim=self.noise_dim,
@@ -201,7 +228,7 @@ class MeteoMamba(nn.Module):
             **mamba_kwargs
         )
         
-        # 4. 物理平流分支
+        # 4. 物理平流分支 (Advection)
         self.advection = AdvectiveProjection(hid_S, in_seq_len, out_seq_len)
         
         # 5. 解码器与跳跃连接
@@ -216,20 +243,26 @@ class MeteoMamba(nn.Module):
 
     def forward(self, x_raw, y_target=None):
         """
+        前向传播。
+        
         Args:
-            x_raw: [B, T_in, C, H, W] 输入序列
-            y_target: [B, T_out, C, H, W] 目标序列 (仅训练时提供，用于 CVAE 学习)
+            x_raw: [B, T_in, C, H, W] 输入历史序列
+            y_target: [B, T_out, C, H, W] 目标未来序列 (仅训练时提供)
+            
         Returns:
-            Y_pred, flows, kl_loss (仅训练时)
+            Y_pred: 预测结果
+            flows: 光流场 (用于可视化或分析)
+            kl_loss: KL 散度损失 (仅在训练模式下返回非零值)
         """
         B, T_in, C_in, H, W = x_raw.shape
         
         # 1. 编码阶段
-        # [B, T, C, H, W] -> [B, T, hid_S, H', W']
+        # embed_hist: [B*T_in, hid_S, H', W']
+        # skip: [B*T_in, hid_S, H, W]
         embed_hist, skip = self.enc(x_raw) 
         _, C_hid, H_, W_ = embed_hist.shape[1:]
         
-        # 调整维度用于 3D 卷积: [B, C, T, H, W]
+        # 调整维度用于 3D 卷积处理: [B, C, T, H, W]
         embed_hist_seq = embed_hist.view(B, T_in, C_hid, H_, W_).permute(0, 2, 1, 3, 4)
         
         kl_loss = torch.tensor(0.0, device=x_raw.device)
@@ -237,46 +270,53 @@ class MeteoMamba(nn.Module):
         
         # 2. CVAE 概率推断逻辑
         if self.training and y_target is not None:
-            # === 训练模式 (Posterior 引导) ===
+            # === 训练模式 (Posterior Guided) ===
+            # 需要"看到未来"来构建后验分布 Q(z|X,Y)
             with torch.no_grad():
-                # 编码未来真值 (不传梯度，仅作参考)
+                # 编码未来真值 (不传梯度，仅作为分布参考)
                 embed_future, _ = self.enc(y_target)
                 embed_future_seq = embed_future.view(B, self.T_out, C_hid, H_, W_).permute(0, 2, 1, 3, 4)
             
-            # Posterior Q(z|X,Y)
+            # 拼接历史与未来
             embed_all = torch.cat([embed_hist_seq, embed_future_seq], dim=2)
+            
+            # 计算 Posterior Q
             post_mu, post_logvar = self.posterior_net(embed_all)
             z = self.reparameterize(post_mu, post_logvar)
             
-            # Prior P(z|X)
+            # 计算 Prior P (仅基于历史)
             prior_mu, prior_logvar = self.prior_net(embed_hist_seq)
             
-            # KL Loss: 让 Posterior 逼近 Prior
+            # 计算 KL(Q || P)
+            # 迫使 Posterior 分布接近 Prior 分布，缩小 Training/Inference Gap
             kl_loss = 0.5 * torch.sum(
                 prior_logvar - post_logvar - 1 + 
                 (post_logvar.exp() + (post_mu - prior_mu).pow(2)) / prior_logvar.exp()
             )
-            kl_loss = kl_loss / B
+            kl_loss = kl_loss / B  # Normalize by batch size
             
         else:
-            # === 推理模式 (Prior 采样) ===
+            # === 推理模式 (Prior Sampling) ===
+            # 仅使用 P(z|X) 从历史推断 z
             prior_mu, prior_logvar = self.prior_net(embed_hist_seq)
             z = self.reparameterize(prior_mu, prior_logvar)
 
         # 3. 演变阶段
+        # 恢复 [B, T, C, H, W] 格式
         z_embed_in = embed_hist.view(B, T_in, C_hid, H_, W_)
         z_hist_out, z_future_out = self.evolution(z_embed_in, z)
         
         # 4. 物理平流阶段
+        # 基于历史最后一帧推演纯物理移动
         z_adv, flows = self.advection(z_hist_out)
         
-        # 5. 特征融合
+        # 5. 特征融合 (Deep Learning + Physics)
         z_combined = z_future_out + z_adv
         
         # 6. 解码阶段
         z_combined_flat = z_combined.reshape(B * self.T_out, C_hid, H_, W_)
         
-        # Skip Connection 时间对齐
+        # Skip Connection 时间投影
         skip = skip.view(B, T_in, C_hid, H, W)
         skip_out = self.skip_proj(skip).view(B * self.T_out, C_hid, H, W)
         
@@ -284,6 +324,7 @@ class MeteoMamba(nn.Module):
         Y_diff = Y_diff.reshape(B, self.T_out, self.out_channels, H, W)
         
         # 7. 残差输出
+        # 最终预测 = 最后一帧观测 + 预测的变化量
         last_frame = x_raw[:, -1:, :self.out_channels, :, :].detach()
         Y = last_frame + Y_diff
         
