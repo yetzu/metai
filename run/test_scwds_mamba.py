@@ -361,7 +361,8 @@ def main():
             y_log = y_log.to(device)
 
             # pred_log = torch.clamp(model(x), 0.0, 1.0)
-            pred_log = torch.clamp(model(x, current_epoch=100), 0.0, 1.0)
+            pred_raw, _ = model(x, current_epoch=100)
+            pred_log = torch.clamp(pred_raw, 0.0, 1.0)
             
             save_path = os.path.join(out_dir, f'sample_{bidx:03d}.png')
             
