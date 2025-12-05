@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.fft  # [新增] 引入 FFT 模块
 import math
 from typing import Optional, Dict, Tuple
 
@@ -22,7 +23,7 @@ class WeightedL1Loss(nn.Module):
         super().__init__()
         self.base_weight = base_weight
         self.scale_weight = scale_weight
-    
+
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         diff = torch.abs(pred - target)
         # 动态权重：Target 越大，权重呈指数级增长
@@ -31,15 +32,11 @@ class WeightedL1Loss(nn.Module):
         
         if mask is not None:
             loss_map = loss_map * mask
-            
-            # [修改部分开始] --------------------------------------------
+            # [Fix] 防止除零风险
             denom = mask.sum()
-            # 如果有效像素点过少（<1.0），直接返回 0 梯度，避免除以极小值导致 NaN
             if denom < 1.0:
                 return torch.tensor(0.0, requires_grad=True, device=pred.device)
-            
             return loss_map.sum() / denom
-            # [修改部分结束] --------------------------------------------
         
         return loss_map.mean()
 
@@ -49,7 +46,6 @@ class WeightedL1Loss(nn.Module):
 class CorrLoss(nn.Module):
     """
     [结构损失] 1 - Pearson 相关系数。
-    防止模型输出全0或常数场。
     """
     def __init__(self, eps=1e-6):
         super().__init__()
@@ -60,15 +56,12 @@ class CorrLoss(nn.Module):
             pred = pred * mask
             target = target * mask
         
-        # [B, H, W] -> [B, N]
         pred_flat = pred.view(pred.shape[0], -1)
         target_flat = target.view(target.shape[0], -1)
 
-        # Centering
         pred_c = pred_flat - pred_flat.mean(dim=1, keepdim=True)
         target_c = target_flat - target_flat.mean(dim=1, keepdim=True)
 
-        # Pearson R
         num = (pred_c * target_c).sum(dim=1)
         den = torch.sqrt((pred_c ** 2).sum(dim=1) * (target_c ** 2).sum(dim=1)) + self.eps
         r = num / den
@@ -81,24 +74,21 @@ class CorrLoss(nn.Module):
 class CSILoss(nn.Module):
     """
     [指标损失] 多阈值加权软 CSI (Soft-CSI)。
-    直接优化竞赛指标。
     """
     def __init__(self):
         super().__init__()
-        # 计算 Log-Space 下的阈值 (0.1mm ~ 8.0mm)
         log_factor = math.log(PHYSICAL_MAX + 1)
         th_mm = [0.1, 1.0, 2.0, 5.0, 8.0]
         th_norm = [math.log(x + 1) / log_factor for x in th_mm]
         
         self.register_buffer('thresholds', torch.tensor(th_norm))
         self.register_buffer('weights', torch.tensor([0.1, 0.1, 0.2, 0.25, 0.35]))
-        self.temperature = 30.0 # Sigmoid 温度系数
+        self.temperature = 30.0
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         loss = 0.0
         for i, thresh in enumerate(self.thresholds):
             w = self.weights[i]
-            # Sigmoid 近似阶跃函数
             pred_score = torch.sigmoid((pred - thresh) * self.temperature)
             target_score = (target > thresh).float() 
             
@@ -106,7 +96,6 @@ class CSILoss(nn.Module):
                 pred_score = pred_score * mask
                 target_score = target_score * mask
             
-            # Soft Confusion Matrix
             intersection = (pred_score * target_score).sum(dim=(-2, -1))
             union = pred_score.sum(dim=(-2, -1)) + target_score.sum(dim=(-2, -1)) - intersection
             
@@ -116,21 +105,53 @@ class CSILoss(nn.Module):
         return loss
 
 # ==============================================================================
-# 4. 混合总损失 (HybridLoss)
+# 4. 频谱损失 (Spectral / FFT Loss) [新增]
+# ==============================================================================
+class FFTLoss(nn.Module):
+    """
+    [频域损失] Log-Frequency Loss。
+    通过在频域计算 L1 损失，强制模型拟合高频分量（纹理细节）。
+    """
+    def __init__(self):
+        super().__init__()
+        self.criterion = nn.L1Loss()
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # 1. 计算 2D 实数 FFT
+        # pred, target shape: [B, H, W] (assuming single channel squeezed)
+        pred_fft = torch.fft.rfft2(pred, norm='ortho')
+        target_fft = torch.fft.rfft2(target, norm='ortho')
+        
+        # 2. 计算幅值 (Amplitude)
+        pred_amp = torch.abs(pred_fft)
+        target_amp = torch.abs(target_fft)
+        
+        # 3. Log 变换 (平衡低频与高频的量级差异)
+        # 加上 1.0 防止 log(0)
+        pred_log = torch.log1p(pred_amp)
+        target_log = torch.log1p(target_amp)
+        
+        # 4. 计算 L1 Loss
+        return self.criterion(pred_log, target_log)
+
+# ==============================================================================
+# 5. 混合总损失 (HybridLoss)
 # ==============================================================================
 class HybridLoss(nn.Module):
     """
-    [总损失] 
+    [总损失] 包含 MAE, CSI, Corr 和 FFT Loss。
     """
-    def __init__(self, weight_mae=10.0, weight_csi=1.0, weight_corr=1.0):
+    def __init__(self, weight_mae=10.0, weight_csi=1.0, weight_corr=1.0, weight_fft=0.1):
         super().__init__()
         self.weight_mae = weight_mae 
         self.weight_csi = weight_csi
         self.weight_corr = weight_corr
+        self.weight_fft = weight_fft  # [新增] 频域损失权重
         
         self.loss_mae = WeightedL1Loss()
         self.loss_csi = CSILoss()
         self.loss_corr = CorrLoss()
+        self.loss_fft = FFTLoss()     # [新增]
         
         # 预报时效权重 (20帧)
         time_weights = [
@@ -155,7 +176,7 @@ class HybridLoss(nn.Module):
             tw = torch.ones(T, device=pred.device) / T
             
         total_loss = 0.0
-        log_mae, log_csi, log_corr = 0.0, 0.0, 0.0
+        log_mae, log_csi, log_corr, log_fft = 0.0, 0.0, 0.0, 0.0
         
         # 3. 逐帧计算
         for t in range(T):
@@ -163,15 +184,22 @@ class HybridLoss(nn.Module):
             t_t = target[:, t, 0]
             m_t = mask[:, t, 0] if mask is not None else None
             
-            w_t = tw[t] * 20.0 # 归一化系数，使权重均值约为1
+            w_t = tw[t] * 20.0 # 归一化系数
             
             l_mae = self.loss_mae(p_t, t_t, m_t)
             l_csi = self.loss_csi(p_t, t_t, m_t)
             l_corr = self.loss_corr(p_t, t_t, m_t)
             
+            # [新增] FFT Loss
+            # 注意：FFT 是全局变换，通常不应用局部 Mask，或者应用 Mask 后再做 FFT。
+            # 这里的策略是对全图计算频域差异，迫使模型在 Mask 区域外（通常是0）也保持干净，
+            # 并在 Mask 区域内（降水区）拟合纹理。
+            l_fft = self.loss_fft(p_t, t_t)
+            
             frame_loss = self.weight_mae * l_mae + \
                          self.weight_csi * l_csi + \
-                         self.weight_corr * l_corr
+                         self.weight_corr * l_corr + \
+                         self.weight_fft * l_fft
             
             total_loss += frame_loss * w_t
             
@@ -179,12 +207,14 @@ class HybridLoss(nn.Module):
                 log_mae += l_mae * w_t
                 log_csi += l_csi * w_t
                 log_corr += l_corr * w_t
+                log_fft += l_fft * w_t
 
         loss_dict = {
             'total_loss': total_loss,
             'l_mae': log_mae.detach(),
             'l_csi': log_csi.detach(),
-            'l_corr': log_corr.detach()
+            'l_corr': log_corr.detach(),
+            'l_fft': log_fft.detach() # [新增]
         }
         
         return total_loss, loss_dict

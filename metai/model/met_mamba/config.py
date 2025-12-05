@@ -51,6 +51,7 @@ class ModelConfig(BaseModel):
     weight_mae: float = 10.0
     weight_csi: float = 1.0
     weight_corr: float = 1.0
+    weight_fft: float = 0.1
     
     # KL 退火策略 (防止 Posterior Collapse)
     kl_weight_max: float = 0.01  # KL Loss 的最大权重
