@@ -20,12 +20,12 @@ class ModelConfig(BaseModel):
     out_channels: int = 1
     
     # 3. 架构参数 (Architecture)
-    hid_S: int = 64
-    hid_T: int = 256
+    hid_S: int = 128
+    hid_T: int = 512
     N_S: int = 4
     N_T: int = 8
     
-    mamba_d_state: int = 16
+    mamba_d_state: int = 32
     mamba_d_conv: int = 4
     mamba_expand: int = 2
     use_checkpoint: bool = True
@@ -35,8 +35,8 @@ class ModelConfig(BaseModel):
     
     # 5. 训练参数 (Training)
     batch_size: int = 4
-    accumulate_grad_batches: int = 1
-    max_epochs: int = 50
+    accumulate_grad_batches: int = 4
+    max_epochs: int = 100
     
     opt: str = "adamw"
     lr: float = 1e-3
@@ -56,9 +56,6 @@ class ModelConfig(BaseModel):
     # KL 退火策略 (防止 Posterior Collapse)
     kl_weight_max: float = 0.01  # KL Loss 的最大权重
     kl_anneal_epochs: int = 25   # 在前 N 个 epoch 内线性增加 KL 权重
-    
-    # 7. 其它
-    use_temporal_weight: bool = True # 是否在 Loss 中对时间步加权
     
     model_config = ConfigDict(protected_namespaces=())
     

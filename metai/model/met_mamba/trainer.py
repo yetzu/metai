@@ -18,20 +18,20 @@ class MeteoMambaModule(LightningModule):
     def __init__(
         self, 
         # --- 模型架构参数 ---
-        in_shape: Tuple[int, int, int] = (19, 256, 256),
+        in_shape: Tuple[int, int, int] = (31, 256, 256),
         in_seq_len: int = 10,
         out_seq_len: int = 20,
         out_channels: int = 1,
-        hid_S: int = 64,
-        hid_T: int = 256,
+        hid_S: int = 128,
+        hid_T: int = 512,
         N_S: int = 4,
         N_T: int = 8,
-        mamba_d_state: int = 16,
+        mamba_d_state: int = 32,
         mamba_d_conv: int = 4,
         mamba_expand: int = 2,
         
         # --- 优化参数 ---
-        lr: float = 1e-3,
+        lr: float = 8e-4,
         weight_decay: float = 1e-2,
         max_epochs: int = 50,
         
